@@ -4,8 +4,10 @@
 //! - `memory_search` / `memory_read` / `memory_propose` / `memory_list_recent` —— agent 可调
 //! - `memory_list_pending` / `memory_review` / `memory_deprecate` —— 仅用户可调(由 UI 转发)
 //!
-//! prototype 阶段 server 不区分调用方;真正区分由前端 UI / 工具白名单决定。
-//! 但**移除了原 prototype 的 `memory_write`**(违反"提议+审核"模型)。
+//! MCP launcher 仍可留在 backend 用户级配置中，便于旧安装无迁移升级；server
+//! 通过 Kode 启动时注入的 runtime context 决定是否暴露工具。外部直接启动的
+//! CLI 可以正常完成 MCP initialize，但 `tools/list` 为空。
+//! **没有**原 prototype 的 `memory_write`(违反"提议+审核"模型)。
 //!
 //! 启动:
 //! ```text
@@ -32,16 +34,30 @@ const SERVER_INSTRUCTIONS: &str = "Kode Memory is a local-only STDIO MCP server.
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let root = match std::env::var("KODE_MEMORY_ROOT") {
-        Ok(v) => std::path::PathBuf::from(v),
-        Err(_) => dirs::home_dir()
-            .context("no home dir")?
-            .join(".kode-memory"),
+    // The launcher is deliberately registered in backend user configuration for
+    // broad version compatibility. Only Kode-owned CLI processes expose tools;
+    // a directly launched external CLI receives a healthy, empty MCP server.
+    // Existing installations gain this behavior when the sidecar is upgraded and
+    // do not need their user configuration rewritten.
+    let kode_active = kode_memory::runtime_context::is_active(None);
+    let state = if kode_active {
+        let root = match std::env::var("KODE_MEMORY_ROOT") {
+            Ok(v) => std::path::PathBuf::from(v),
+            Err(_) => dirs::home_dir()
+                .context("no home dir")?
+                .join(".kode-memory"),
+        };
+        eprintln!("[kode-memory-mcp] root = {}", root.display());
+        Some((
+            Arc::new(Mutex::new(MemoryStore::open(&root)?)),
+            Arc::new(Mutex::new(BudgetStore::open(&root)?)),
+        ))
+    } else {
+        // Do not even open/create the memory root for an external CLI. We retain a
+        // minimal MCP handshake only because old user-level registrations may still
+        // launch this binary during the zero-config upgrade path.
+        None
     };
-    eprintln!("[kode-memory-mcp] root = {}", root.display());
-
-    let store = Arc::new(Mutex::new(MemoryStore::open(&root)?));
-    let budget = Arc::new(Mutex::new(BudgetStore::open(&root)?));
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -67,7 +83,7 @@ async fn main() -> Result<()> {
             .to_string();
         let params = req.get("params").cloned().unwrap_or(json!({}));
 
-        let response = match handle(&method, params, &store, &budget).await {
+        let response = match handle(&method, params, state.as_ref()).await {
             Ok(Some(result)) => Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -94,19 +110,25 @@ async fn main() -> Result<()> {
 async fn handle(
     method: &str,
     params: Value,
-    store: &Arc<Mutex<MemoryStore>>,
-    budget: &Arc<Mutex<BudgetStore>>,
+    state: Option<&(Arc<Mutex<MemoryStore>>, Arc<Mutex<BudgetStore>>)>,
 ) -> Result<Option<Value>> {
     match method {
         "initialize" => Ok(Some(json!({
             "protocolVersion": "2024-11-05",
             "serverInfo": { "name": "kode-memory", "version": "0.1.0" },
             "capabilities": { "tools": {} },
-            "instructions": SERVER_INSTRUCTIONS
+            "instructions": if state.is_some() { SERVER_INSTRUCTIONS } else { "" }
         }))),
         "notifications/initialized" | "notifications/cancelled" => Ok(None),
-        "tools/list" => Ok(Some(json!({ "tools": tool_specs() }))),
+        "tools/list" => Ok(Some(json!({
+            "tools": if state.is_some() { tool_specs() } else { json!([]) }
+        }))),
         "tools/call" => {
+            let Some((store, budget)) = state else {
+                return Err(anyhow::anyhow!(
+                    "kode-memory is available only inside a Kode-managed CLI session"
+                ));
+            };
             let name = params
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -562,6 +584,50 @@ async fn handle_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_state() -> (
+        tempfile::TempDir,
+        Arc<Mutex<MemoryStore>>,
+        Arc<Mutex<BudgetStore>>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(MemoryStore::open(dir.path()).unwrap()));
+        let budget = Arc::new(Mutex::new(BudgetStore::open(dir.path()).unwrap()));
+        (dir, store, budget)
+    }
+
+    #[tokio::test]
+    async fn external_cli_gets_healthy_empty_tool_list() {
+        let result = handle("tools/list", json!({}), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, json!({ "tools": [] }));
+    }
+
+    #[tokio::test]
+    async fn kode_cli_gets_memory_tools() {
+        let (_dir, store, budget) = test_state();
+        let result = handle("tools/list", json!({}), Some(&(store, budget)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn external_cli_cannot_call_hidden_tool_directly() {
+        let error = handle(
+            "tools/call",
+            json!({"name": "memory_search", "arguments": {"query": "x"}}),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Kode-managed CLI session"));
+    }
 
     #[test]
     fn server_instructions_lead_with_local_only_boundary() {

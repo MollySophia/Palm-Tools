@@ -359,6 +359,7 @@ fn inject_hooks_into_settings() {
 }
 
 /// 构建注入到子进程的 extra env。镜像本地 `transport/local.rs` 的逻辑:
+/// - `KODE_HOST=1`:memory/hook 只在 Kode 托管进程中激活
 /// - `KODE_HOOK_SOCK`:hook command 定位 relay socket(仅当 ctx 启用了 HookRelay)
 /// - `KODE_SESSION_ID`:让 `kode-memory codebuddy-hook` 把 codebuddy 的 uuid session_id
 ///   改写成 kode tab id(u64),使 relay 能正确路由
@@ -371,6 +372,7 @@ fn build_session_env(
     term_theme: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut env = Vec::new();
+    env.push(("KODE_HOST".to_string(), "1".to_string()));
     if let Some(sock) = ctx.hook_relay_socket.as_deref() {
         env.push((
             "KODE_HOOK_SOCK".to_string(),

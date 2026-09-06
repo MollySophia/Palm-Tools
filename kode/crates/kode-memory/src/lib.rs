@@ -20,6 +20,7 @@ pub mod git_sync;
 pub mod hook_setup;
 pub mod metrics;
 pub mod prompt;
+pub mod runtime_context;
 pub mod store;
 
 pub use budget::{BudgetError, BudgetStore};

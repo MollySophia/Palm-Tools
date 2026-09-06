@@ -528,6 +528,7 @@ mod build_session_env_tests {
         ctx.hook_relay_socket = Some(std::path::PathBuf::from("/tmp/test-hook.sock"));
         let env = build_session_env(&ctx, 42, "codex", None);
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"KODE_HOST"), "missing KODE_HOST");
         assert!(keys.contains(&"KODE_HOOK_SOCK"), "missing KODE_HOOK_SOCK");
         assert!(keys.contains(&"KODE_SESSION_ID"), "missing KODE_SESSION_ID");
         assert!(
@@ -563,6 +564,7 @@ mod build_session_env_tests {
         // hook_relay_socket = None(build_test_ctx 默认)
         let env = build_session_env(&ctx, 7, "codebuddy", Some("light"));
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"KODE_HOST"));
         assert!(
             !keys.contains(&"KODE_HOOK_SOCK"),
             "should not have KODE_HOOK_SOCK"

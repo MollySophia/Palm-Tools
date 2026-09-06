@@ -324,6 +324,19 @@ fn merge_codex_memory_approval_policy(path: &Path) -> Result<(), String> {
         disabled_tools.push("memory_deprecate");
         memory.insert("disabled_tools", value(disabled_tools));
     }
+    // Codex sanitizes the environment of stdio MCP children. Pass through the
+    // dynamic Kode markers instead of writing fixed values into `env`, which
+    // would incorrectly activate memory for externally launched Codex sessions.
+    let env_vars = memory
+        .entry("env_vars")
+        .or_insert_with(|| value(Array::new()))
+        .as_array_mut()
+        .ok_or("mcp_servers.memory.env_vars must be a TOML array")?;
+    for name in ["KODE_HOST", "KODE_SESSION_ID", "KODE_BACKEND_KEY"] {
+        if !env_vars.iter().any(|item| item.as_str() == Some(name)) {
+            env_vars.push(name);
+        }
+    }
     let tools = memory
         .entry("tools")
         .or_insert_with(|| Item::Table(Table::new()))
@@ -625,6 +638,16 @@ pub fn spawn_startup_probe(app: AppHandle) {
             }
         };
         let backends = app_state.ctx.backend_configs.read().clone();
+        // Migrate already-installed entries even when the user dismissed future
+        // auto-setup prompts. This is an in-place compatibility repair, not a new
+        // integration: it preserves the command, user policy, and custom env vars.
+        for backend in backends.values() {
+            if let Some(spec) = &backend.mcp_setup {
+                if let Err(error) = migrate_existing_runtime_config(spec) {
+                    tracing::warn!(%error, "memory MCP runtime migration failed");
+                }
+            }
+        }
         let result = probe(&backends, &app_state.persist);
 
         // 用户之前 dismiss 过 → 尊重选择,不跑 MCP 自动配置。
@@ -691,6 +714,20 @@ pub fn spawn_startup_probe(app: AppHandle) {
             let _ = app.emit("memory-mcp-changed", ());
         }
     });
+}
+
+fn migrate_existing_runtime_config(spec: &McpSetupSpec) -> Result<(), String> {
+    if !matches!(spec, McpSetupSpec::Codex { .. }) {
+        return Ok(());
+    }
+    let Some(path) = codex_config_path() else {
+        return Ok(());
+    };
+    let expected_binary = resolve_binary();
+    if toml_has_memory_server(&path, expected_binary.as_deref()) {
+        merge_codex_memory_approval_policy(&path)?;
+    }
+    Ok(())
 }
 
 // ============== 内部实现 ==============
@@ -903,6 +940,14 @@ fn toml_has_memory_approval_policy(p: &Path) -> bool {
         .get("disabled_tools")
         .and_then(|item| item.as_array())
         .is_some();
+    let has_runtime_env = memory
+        .get("env_vars")
+        .and_then(|item| item.as_array())
+        .is_some_and(|values| {
+            ["KODE_HOST", "KODE_SESSION_ID", "KODE_BACKEND_KEY"]
+                .iter()
+                .all(|name| values.iter().any(|value| value.as_str() == Some(name)))
+        });
     let tool_mode = |name: &str| {
         memory
             .get("tools")
@@ -914,6 +959,7 @@ fn toml_has_memory_approval_policy(p: &Path) -> bool {
     };
     has_default
         && has_disabled_tools
+        && has_runtime_env
         && tool_mode("memory_search").is_some()
         && tool_mode("memory_propose") == Some("approve")
 }
@@ -1426,6 +1472,10 @@ args = []
             doc["mcp_servers"]["memory"]["tools"]["memory_propose"]["approval_mode"].as_str(),
             Some("approve")
         );
+        let env_vars = doc["mcp_servers"]["memory"]["env_vars"].as_array().unwrap();
+        for name in ["KODE_HOST", "KODE_SESSION_ID", "KODE_BACKEND_KEY"] {
+            assert!(env_vars.iter().any(|value| value.as_str() == Some(name)));
+        }
         let disabled = doc["mcp_servers"]["memory"]["disabled_tools"]
             .as_array()
             .unwrap();
@@ -1451,6 +1501,7 @@ model = "custom-model"
 [mcp_servers.memory]
 command = "/path/to/kode-memory-mcp"
 default_tools_approval_mode = "prompt"
+env_vars = ["USER_DEFINED", "KODE_HOST"]
 
 [mcp_servers.memory.tools.memory_search]
 approval_mode = "prompt"
@@ -1482,6 +1533,18 @@ approval_mode = "prompt"
             Some("approve"),
             "Kode's legacy propose prompt must migrate to the pending-review policy"
         );
+        let env_vars = doc["mcp_servers"]["memory"]["env_vars"].as_array().unwrap();
+        assert_eq!(
+            env_vars
+                .iter()
+                .filter(|value| value.as_str() == Some("KODE_HOST"))
+                .count(),
+            1,
+            "migration must be idempotent"
+        );
+        assert!(env_vars
+            .iter()
+            .any(|value| value.as_str() == Some("USER_DEFINED")));
         assert!(toml_has_memory_approval_policy(&cfg));
         let _ = std::fs::remove_dir_all(&tmp);
     }

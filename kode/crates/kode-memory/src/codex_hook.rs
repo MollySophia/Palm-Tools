@@ -48,6 +48,12 @@ struct HookInput {
 
 /// Run from the `kode-memory codex-hook` CLI subcommand.
 pub fn run() -> Result<()> {
+    // Hooks are installed in Codex's user configuration so upgrades remain
+    // automatic. Outside a Kode-owned Codex process they must be invisible:
+    // no prompt injection, no Stop blocking, and no relay side effects.
+    if !crate::runtime_context::is_active(Some("codex")) {
+        return Ok(());
+    }
     let mut input = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
     if let Some(output) = handle_json(&input)? {

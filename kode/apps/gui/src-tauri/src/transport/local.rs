@@ -102,11 +102,13 @@ impl SessionTransport for LocalTransport {
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")));
 
         // 构建 extra_env:
+        // - KODE_HOST 是 memory/hook 的宿主激活开关；外部 CLI 不会拥有它。
         // - KODE_HOOK_SOCK 供 hook command 定位 GUI relay socket。
         // - KODE_SESSION_ID 让 Codex hook 把 Codex 自己的 session id 映射回 Kode tab id。
         // - KODE_MEMORY_ROOT 让 hook 子进程与 GUI/MCP 使用同一份 memory root。
         // - TERM_THEME / COLORFGBG 让 cursor-agent / Claude / 其它 TUI 跳过 OSC 11。
         let mut extra_env: Vec<(String, String)> = Vec::new();
+        extra_env.push(("KODE_HOST".to_string(), "1".to_string()));
         if let Some(sock) = self.hook_sock.as_deref() {
             extra_env.push(("KODE_HOOK_SOCK".to_string(), sock.to_string()));
         }
