@@ -970,6 +970,7 @@ export interface MemoryBacklink {
 export interface MemoryFactWithBacklinks {
   fact: MemoryFactFull
   backlinks: MemoryBacklink[]
+  relations: MemoryRelationSummary[]
 }
 
 export interface MemorySearchHit {
@@ -985,8 +986,17 @@ export interface MemorySearchHit {
   snippet: string
   body: string
   score: number
+  relations: MemoryRelationSummary[]
   /** 前端聚合时打上的来源标注(后端不返回此字段) */
   origin?: MemoryOrigin
+}
+
+export interface MemoryRelationSummary {
+  id: string
+  kind: 'related' | 'contradicts' | 'supersedes'
+  direction: 'symmetric' | 'outgoing' | 'incoming'
+  title: string | null
+  snippet: string
 }
 
 export interface MemorySearchArgs {
@@ -1016,6 +1026,10 @@ export interface MemoryMetricsSummary {
   today_proposes: number
   accept_rate_7d: number | null
   total_reviews_7d: number
+  relation_suggested_7d: number
+  relation_accepted_7d: number
+  relation_followed_7d: number
+  relation_usage_7d: number | null
   by_author: MemoryAuthorAccept[]
   energy_by_author: MemoryEnergyEntry[]
 }
@@ -1038,6 +1052,7 @@ function normalizeRemoteHit(raw: Record<string, unknown>): MemorySearchHit {
     // 远端 hit 没有完整 body,退化到 snippet(spec: Browse 远端 detail 用 search hit 字段)
     body: typeof raw.body === 'string' && raw.body ? (raw.body as string) : snippet,
     score: typeof raw.score === 'number' ? raw.score : 0,
+    relations: Array.isArray(raw.relations) ? raw.relations as MemoryRelationSummary[] : [],
   }
 }
 
@@ -1103,8 +1118,12 @@ export const memoryIpc = {
     invoke<void>('memory_deprecate', { id, reason }),
   updateScope: (id: string, scope: string) =>
     invoke<void>('memory_update_scope', { id, scope }),
+  updateRelations: (id: string, related: string[], contradicts: string[]) =>
+    invoke<void>('memory_update_relations', { id, related, contradicts }),
   bumpRecall: (id: string, query?: string) =>
     invoke<void>('memory_bump_recall', { id, query }),
+  recordRelationFollowed: (fromId: string, toId: string) =>
+    invoke<void>('memory_record_relation_followed', { fromId, toId }),
   metricsSummary: () => invoke<MemoryMetricsSummary>('memory_metrics_summary'),
 
   /** Browse 面板 filter 持久化(state.json) */

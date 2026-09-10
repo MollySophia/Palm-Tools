@@ -199,6 +199,13 @@
     return pending.find((p) => pendingKey(p) === selectedKey) ?? null
   }
 
+  function selectPending(p: MemoryPending) {
+    selectedKey = pendingKey(p)
+    editing = false
+    editRelated = [...p.related]
+    editContradicts = [...p.contradicts]
+  }
+
   function resetBatchDecision() {
     batchConfirmMode = null
     bulkRejectReason = ''
@@ -310,7 +317,10 @@
       pending = pending.filter((p) => !succeeded.has(pendingKey(p)))
       checkedKeys = new Set([...checkedKeys].filter((key) => !succeeded.has(key)))
       const selectedWasRemoved = selectedKey ? succeeded.has(selectedKey) : false
-      if (selectedWasRemoved) selectedKey = pending[0] ? pendingKey(pending[0]) : null
+      if (selectedWasRemoved) {
+        if (pending[0]) selectPending(pending[0])
+        else selectedKey = null
+      }
       batchResult = { succeeded: succeeded.size, failed: failures.length }
 
       if (failures.length > 0) {
@@ -363,7 +373,18 @@
     await bulkReview(mode === 'approve' ? { kind: 'approve' } : { kind: 'reject', reason })
   }
 
-  async function approve() { await review({ kind: 'approve' }) }
+  async function approve() {
+    const s = selected()
+    if (!s) return
+    // Single-item approval is the relation confirmation boundary. Use the edit
+    // verdict without changing content so additions/removals from the picker are
+    // committed atomically with the fact.
+    await review({
+      kind: 'edit_then_approve',
+      related: editRelated,
+      contradicts: editContradicts,
+    })
+  }
 
   /// 进入 inline reason 输入态(reject 或 blacklist)。Tauri 没有原生 prompt,
   /// 所以在面板内显示一行输入框 + 确认/取消按钮,Enter 确认 / Esc 取消。
@@ -431,12 +452,12 @@
         e.preventDefault()
         const idx = pending.findIndex((p) => pendingKey(p) === selectedKey)
         const next = pending[Math.min(pending.length - 1, idx + 1)] ?? pending[0]
-        selectedKey = pendingKey(next)
+        selectPending(next)
       } else if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault()
         const idx = pending.findIndex((p) => pendingKey(p) === selectedKey)
         const prev = pending[Math.max(0, idx - 1)] ?? pending[0]
-        selectedKey = pendingKey(prev)
+        selectPending(prev)
       } else if (e.key === 'Enter') {
         e.preventDefault()
         if (selected()) approve()
@@ -550,7 +571,7 @@
                   type="button"
                   class="list-item"
                   aria-current={pendingKey(p) === selectedKey ? 'true' : undefined}
-                  onclick={() => { selectedKey = pendingKey(p); editing = false }}
+                  onclick={() => selectPending(p)}
                 >
                   <div class="li-row1">
                     <span class="li-kind" title={p.kind}>
@@ -752,6 +773,14 @@
                 {#if s.rationale}
                   <h3>{t('memory.review.rationale')} <span class="muted">({t('memory.review.rationaleHint')})</span></h3>
                   <pre class="d-rationale">{s.rationale}</pre>
+                {/if}
+                {#if (s.origin ?? { kind: 'local' }).kind === 'local'}
+                  <RelatedFactPicker
+                    parentId={s.id}
+                    scope={s.scope}
+                    bind:related={editRelated}
+                    bind:contradicts={editContradicts}
+                  />
                 {/if}
               </div>
             {/if}

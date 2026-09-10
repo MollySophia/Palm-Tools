@@ -87,7 +87,11 @@
 
   /** 给 onLink 切换详情 */
   function gotoFact(id: string) {
+    const fromId = selectedId
     selectedId = id
+    if (fromId && fromId !== id) {
+      void memoryIpc.recordRelationFollowed(fromId, id).catch(() => {})
+    }
     // 也尝试加入结果列表头(若没在)
     if (!hits.find((h) => h.id === id)) {
       // best-effort:再触发一次搜索把它捞出来
@@ -501,6 +505,11 @@
                         <span class="card-origin" title={originLabel(h.origin)}>{originLabel(h.origin)}</span>
                       {/if}
                       {#if h.subsystem}<span class="card-sub">{h.subsystem}</span>{/if}
+                      {#if h.relations.length > 0}
+                        <span class="card-sub" title={`${h.relations.length} linked facts`}>
+                          <Icon name="link" size="10" /> {h.relations.length}
+                        </span>
+                      {/if}
                       {#if h.confidence < 0.7}<span class="card-lowconf" title={t('memory.browse.lowConfidence')}>{h.confidence.toFixed(2)}</span>{/if}
                       <span class="card-date" title={formatLocalDateTimeFull(h.created)}>{cardDate(h.created)}</span>
                     </div>

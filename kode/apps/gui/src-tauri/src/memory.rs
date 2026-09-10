@@ -29,7 +29,8 @@ use kode_memory::{
     budget::{BudgetStore, COST_PROPOSE, PENALTY_BLACKLIST, PENALTY_REJECT, REWARD_APPROVE},
     git_sync,
     store::{
-        Backlink, FactWithBacklinks, PendingFact, ReviewOutcome, SearchHit, SearchOpts, Verdict,
+        Backlink, FactWithBacklinks, PendingFact, RelationSummary, ReviewOutcome, SearchHit,
+        SearchOpts, Verdict,
     },
     Fact, Kind, MemoryStore, Scope,
 };
@@ -263,6 +264,7 @@ pub struct SearchHitDto {
     pub snippet: String,
     pub body: String,
     pub score: f32,
+    pub relations: Vec<RelationSummary>,
 }
 
 fn search_hit_to_dto(store: &MemoryStore, hit: SearchHit) -> SearchHitDto {
@@ -284,6 +286,7 @@ fn search_hit_to_dto(store: &MemoryStore, hit: SearchHit) -> SearchHitDto {
         snippet: hit.snippet,
         body,
         score: hit.score,
+        relations: hit.relations,
     }
 }
 
@@ -308,6 +311,7 @@ impl From<Backlink> for BacklinkDto {
 pub struct FactWithBacklinksDto {
     pub fact: FactDto,
     pub backlinks: Vec<BacklinkDto>,
+    pub relations: Vec<RelationSummary>,
 }
 
 impl From<FactWithBacklinks> for FactWithBacklinksDto {
@@ -315,6 +319,7 @@ impl From<FactWithBacklinks> for FactWithBacklinksDto {
         Self {
             fact: FactDto::from(f.fact),
             backlinks: f.backlinks.into_iter().map(BacklinkDto::from).collect(),
+            relations: f.relations,
         }
     }
 }
@@ -342,6 +347,12 @@ pub struct MetricsSummaryDto {
     pub accept_rate_7d: Option<f32>,
     /// 7 天 review 总数(给 hover 卡片显示分母信心)
     pub total_reviews_7d: u64,
+    pub relation_suggested_7d: u64,
+    pub relation_accepted_7d: u64,
+    pub relation_followed_7d: u64,
+    /// Traversals per accepted relation-bearing change. This is a usage signal,
+    /// not a unique-user conversion rate, and may exceed 1 with repeat visits.
+    pub relation_usage_7d: Option<f32>,
     /// 按 author 分组(字典序)
     pub by_author: Vec<AuthorAcceptDto>,
     /// 各 author 当前能量(已 refill)
@@ -648,6 +659,20 @@ pub async fn memory_update_scope(
     store.update_scope(&id, new_scope).map_err(err_to_string)
 }
 
+#[tauri::command]
+pub async fn memory_update_relations(
+    handle: State<'_, Arc<MemoryHandle>>,
+    id: String,
+    related: Vec<String>,
+    contradicts: Vec<String>,
+) -> Result<(), String> {
+    let h = handle.inner().clone();
+    let mut store = h.store.lock().await;
+    store
+        .update_relations(&id, related, contradicts)
+        .map_err(err_to_string)
+}
+
 /// Phase 10.13:用户在 Browse 点击了某条 hit = 反馈"这条有用",
 /// 写 SQLite + metrics.jsonl(后台聚合 task 也读同一份)。
 #[tauri::command]
@@ -660,6 +685,21 @@ pub async fn memory_bump_recall(
     let mut store = h.store.lock().await;
     store
         .bump_recall(&id, query.as_deref())
+        .map_err(err_to_string)
+}
+
+/// Record that the user traversed an existing graph edge from the detail view.
+#[tauri::command]
+pub async fn memory_record_relation_followed(
+    handle: State<'_, Arc<MemoryHandle>>,
+    from_id: String,
+    to_id: String,
+) -> Result<(), String> {
+    let h = handle.inner().clone();
+    let store = h.store.lock().await;
+    store
+        .record_relation_followed(&from_id, &to_id)
+        .map(|_| ())
         .map_err(err_to_string)
 }
 
@@ -742,11 +782,20 @@ pub async fn memory_metrics_summary(
         .collect();
     by_author.sort_by(|a, b| a.author.cmp(&b.author));
     let total_reviews_7d: u64 = by_author.iter().map(|s| s.total_reviews).sum();
+    let relation_suggested_7d = agg.by_kind.get("relation_suggested").copied().unwrap_or(0);
+    let relation_accepted_7d = agg.by_kind.get("relation_accepted").copied().unwrap_or(0);
+    let relation_followed_7d = agg.by_kind.get("relation_followed").copied().unwrap_or(0);
+    let relation_usage_7d = (relation_accepted_7d > 0)
+        .then_some(relation_followed_7d as f32 / relation_accepted_7d as f32);
 
     let dto = MetricsSummaryDto {
         today_proposes: agg.today_proposes,
         accept_rate_7d: agg.accept_rate,
         total_reviews_7d,
+        relation_suggested_7d,
+        relation_accepted_7d,
+        relation_followed_7d,
+        relation_usage_7d,
         by_author,
         energy_by_author,
     };

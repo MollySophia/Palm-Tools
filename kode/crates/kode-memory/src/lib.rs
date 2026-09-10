@@ -27,4 +27,6 @@ pub use budget::{BudgetError, BudgetStore};
 pub use fact::{Fact, FactMeta, Kind, Scope};
 pub use git_sync::{SyncConfig, SyncReport};
 pub use metrics::{Aggregate7d, AuthorAcceptRate, EventKind, MetricsEvent, MetricsLog};
-pub use store::{Backlink, FactWithBacklinks, MemoryStore, SearchFilter, SearchHit, SearchOpts};
+pub use store::{
+    Backlink, FactWithBacklinks, MemoryStore, RelationSummary, SearchFilter, SearchHit, SearchOpts,
+};

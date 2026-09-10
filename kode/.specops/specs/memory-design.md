@@ -170,6 +170,16 @@ PtyHost::kill 必须用 clone_killer() 拿独立 kill 句柄。
 - `scope`:`project:<slug>` 或 `shared`(v1 不开 `global`)
 - `confidence`:[0, 1],写入方自评。检索时与 BM25 score 加权
 - `supersedes`:替换的老条目 id;daemon 自动把老条目标 deprecated
+
+### 关系闭环与升级迁移（2026-09）
+
+- 文件仍是关系的唯一事实源：`related`、`contradicts`、`supersedes` 写在发起方 fact frontmatter；SQLite `links` 只是可重建索引。
+- API 展示语义：`related` / `contradicts` 从任一端读取都返回 `direction=symmetric`；`supersedes` 返回 `outgoing` / `incoming`，避免把替换关系误画成无向边。
+- `memory_search` 每个 hit 最多附带 2 条一跳 `relations` 摘要；`memory_read` / GUI detail 返回完整一跳关系。MCP 从搜索关系继续读取时传 `from_id`，GUI 点击关系时自动记录 `relation_followed`。
+- 提议阶段无论 `force` 或 `supersedes` 都运行候选关系发现；审核界面允许确认、增删 `related` / `contradicts`。已批准的历史 fact 可在 Browse detail 中直接编辑这两类关系。
+- 指标闭环使用 `relation_suggested`、`relation_accepted`、`relation_followed`，用于分别衡量曝光、确认和真实沿边访问。状态卡的 7 天 relation usage = followed / accepted；重复访问会重复计数，因此它是使用强度信号而非唯一用户转化率，允许超过 100%。
+- 升级不批量改写 vault：启动 reconcile 会从所有现有 frontmatter 幂等重建 `links`，旧 `links:` 字段按既有兼容逻辑迁到 `related`。无关系的历史 fact 保持原样，由详情 picker 按需补链，避免自动生成错误知识边。
+- Kode Memory 的 MCP/hook 仅在 Kode 启动 CLI 时注入的 `KODE_HOST` 运行上下文中启用；用户在外部直接启动相同 CLI 不会隐式启动或写入 Kode Memory。
 - `ttl_days`:过期天数(可选);后台 task 每天扫一次
 
 ### 4.3 SQLite Schema

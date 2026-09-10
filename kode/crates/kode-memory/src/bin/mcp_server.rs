@@ -166,7 +166,10 @@ fn tool_specs() -> Value {
             "description": "Read a fact's full content by id.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "id": {"type": "string"} },
+                "properties": {
+                    "id": {"type": "string"},
+                    "from_id": {"type": "string", "description": "Optional search-hit fact followed to reach this related fact; records relation usefulness."}
+                },
                 "required": ["id"]
             },
             "annotations": read_only_annotations("Read a local memory fact")
@@ -310,8 +313,12 @@ async fn call_tool(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing id"))?;
             let s = store.lock().await;
+            if let Some(from_id) = args.get("from_id").and_then(|v| v.as_str()) {
+                let _ = s.record_relation_followed(from_id, id)?;
+            }
             let f = s.read(id)?;
-            Ok(json!({ "meta": &f.meta, "body": &f.body }).to_string())
+            let relations = s.relations(id, 100)?;
+            Ok(json!({ "meta": &f.meta, "body": &f.body, "relations": relations }).to_string())
         }
         "memory_propose" => handle_propose(args, store, budget).await,
         "memory_list_recent" => {

@@ -18,6 +18,7 @@
   import { onMount } from 'svelte'
   import { memoryIpc, type MemoryFactWithBacklinks } from './ipc'
   import Icon, { type IconName } from './Icon.svelte'
+  import RelatedFactPicker from './RelatedFactPicker.svelte'
   import { formatLocalDateTimeFull } from './time'
   import { t } from './i18n'
 
@@ -29,18 +30,27 @@
 
   let data: MemoryFactWithBacklinks | null = $state(null)
   let loadError: string | null = $state(null)
-  let backlinksOpen = $state(false)
+  let editingRelations = $state(false)
+  let editRelated: string[] = $state([])
+  let editContradicts: string[] = $state([])
+  let savingRelations = $state(false)
+  let refreshSeq = $state(0)
 
   $effect(() => {
     // factId 变化 → 重新加载
     void factId
+    void refreshSeq
     let cancelled = false
     ;(async () => {
       data = null
       loadError = null
       try {
         const r = await memoryIpc.readWithBacklinks(factId)
-        if (!cancelled) data = r
+        if (!cancelled) {
+          data = r
+          editRelated = [...r.fact.related]
+          editContradicts = [...r.fact.contradicts]
+        }
       } catch (e) {
         if (!cancelled) loadError = String(e)
       }
@@ -71,6 +81,21 @@
       await navigator.clipboard.writeText(data.fact.id)
     } catch {
       // 静默 — Tauri 默认允许 navigator.clipboard,失败也只是复制不上而已
+    }
+  }
+
+  async function saveRelations() {
+    if (!data || savingRelations) return
+    savingRelations = true
+    loadError = null
+    try {
+      await memoryIpc.updateRelations(data.fact.id, editRelated, editContradicts)
+      editingRelations = false
+      refreshSeq += 1
+    } catch (e) {
+      loadError = String(e)
+    } finally {
+      savingRelations = false
     }
   }
 </script>
@@ -184,62 +209,37 @@ type: {f.kind}
     {/if}
   </section>
 
-  {#if f.supersedes || f.related.length > 0 || f.contradicts.length > 0}
-    <section class="block links">
-      <h3><Icon name="link" /> Links</h3>
-      {#if f.supersedes}
-        <div class="link-row">
-          <span class="muted">supersedes</span>
-          <button class="link-btn" onclick={() => onLink?.(f.supersedes!)}>
-            <code>{shortId(f.supersedes)}</code>
-          </button>
-        </div>
-      {/if}
-      {#if f.related.length > 0}
-        <div class="link-row">
-          <span class="muted">related</span>
-          {#each f.related as id}
-            <button class="link-btn" onclick={() => onLink?.(id)}>
-              <code>{shortId(id)}</code>
+  <section class="block links">
+    <h3><Icon name="link" /> Relations</h3>
+    {#if data.relations.length > 0}
+      <ul class="bl-list">
+        {#each data.relations as relation (relation.id + relation.kind + relation.direction)}
+          <li>
+            <button class="bl-item" onclick={() => onLink?.(relation.id)}>
+              <code class="bl-id">{shortId(relation.id)}</code>
+              <span class="bl-kind {relation.kind}">
+                {relation.kind === 'supersedes'
+                  ? (relation.direction === 'outgoing' ? 'supersedes' : 'superseded by')
+                  : relation.kind}
+              </span>
+              <span class="bl-snippet">{relation.title || relation.snippet}</span>
             </button>
-          {/each}
-        </div>
-      {/if}
-      {#if f.contradicts.length > 0}
-        <div class="link-row">
-          <span class="muted">contradicts</span>
-          {#each f.contradicts as id}
-            <button class="link-btn warn" onclick={() => onLink?.(id)}>
-              <code>{shortId(id)}</code>
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </section>
-  {/if}
-
-  {#if data.backlinks.length > 0}
-    <section class="block backlinks">
-      <button class="bl-toggle" onclick={() => (backlinksOpen = !backlinksOpen)}>
-        <Icon name={backlinksOpen ? 'chevron-down' : 'chevron-right'} />
-        <strong>{data.backlinks.length} backlinks</strong>
-        <span class="muted">(谁引用了我)</span>
-      </button>
-      {#if backlinksOpen}
-        <ul class="bl-list">
-          {#each data.backlinks as b (b.id + b.kind)}
-            <li>
-              <button class="bl-item" onclick={() => onLink?.(b.id)}>
-                <code class="bl-id">{shortId(b.id)}</code>
-                <span class="bl-kind {b.kind}">{b.kind}</span>
-                <span class="bl-snippet">{b.snippet}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-  {/if}
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <div class="muted">No relations yet.</div>
+    {/if}
+    {#if editingRelations}
+      <RelatedFactPicker parentId={f.id} scope={f.scope} bind:related={editRelated} bind:contradicts={editContradicts} />
+      <div class="link-row">
+        <button class="link-btn" disabled={savingRelations} onclick={saveRelations}>Save relations</button>
+        <button class="link-btn" disabled={savingRelations} onclick={() => (editingRelations = false)}>Cancel</button>
+      </div>
+    {:else}
+      <button class="link-btn" onclick={() => (editingRelations = true)}>Edit relations</button>
+    {/if}
+  </section>
 {/if}
 
 <style>
@@ -423,11 +423,6 @@ type: {f.kind}
     gap: 4px;
     margin: 3px 0;
     align-items: baseline;
-  }
-  .link-row .muted {
-    width: 96px;
-    flex-shrink: 0;
-    text-align: right;
   }
   .link-btn {
     background: transparent;

@@ -155,4 +155,5 @@ Billing, payment, regulated copy, and end-user permission policy are not part of
 - Accessibility checks: Keyboard selection, indeterminate header state, focus-visible, exact accessible labels, live progress/result, and post-mutation focus.
 - Canonical sibling flow used for comparison: `MemoryBrowsePanel.svelte` drawer layout and shared `ToastHost` feedback.
 - CRUD full-flow evidence: Memory review interaction tests and manual local/remote review flow.
+- Memory relation flow: review shows suggested relations before approval; approved local facts expose one unified relation list (symmetric related/contradicts, directional supersedes), support add/remove in place, and relation traversal is recorded as usage feedback. Remote facts remain read-only until the remote detail/update protocol carries the same graph contract.
 - Failure-path evidence: Partial-source and partial-batch failure states in `MemoryPanel.svelte`.

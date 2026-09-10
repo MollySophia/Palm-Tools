@@ -71,6 +71,17 @@
         <span class="lbl">{tr('memory.metrics.todayProposes')}</span>
         <span class="val">{data.today_proposes}</span>
       </div>
+      <div class="line" title="relation traversals / accepted relation-bearing changes; repeat visits count">
+        <span class="lbl">Relation usage (7d)</span>
+        <span class="val">
+          {#if data.relation_usage_7d != null}
+            {(data.relation_usage_7d * 100).toFixed(0)}%
+            <span class="muted small">({data.relation_followed_7d}/{data.relation_accepted_7d})</span>
+          {:else}
+            <span class="muted">--</span>
+          {/if}
+        </span>
+      </div>
       <div class="line">
         <span class="lbl">{tr('memory.metrics.acceptRate7d')}</span>
         <span class="val">

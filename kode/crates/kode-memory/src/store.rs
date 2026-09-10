@@ -40,6 +40,19 @@ pub struct SearchHit {
     /// 2026-07+:人类可读标题
     #[serde(default)]
     pub title: Option<String>,
+    /// One-hop relation context, capped by the search path to keep MCP output bounded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<RelationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelationSummary {
+    pub id: String,
+    pub kind: String,
+    /// `symmetric`, `outgoing`, or `incoming`.
+    pub direction: String,
+    pub title: Option<String>,
+    pub snippet: String,
 }
 
 /// 检索过滤器(2026-06+)。所有字段都是可选叠加;空 = 不限制。
@@ -86,6 +99,8 @@ pub struct Backlink {
 pub struct FactWithBacklinks {
     pub fact: Fact,
     pub backlinks: Vec<Backlink>,
+    #[serde(default)]
+    pub relations: Vec<RelationSummary>,
 }
 
 /// links 表三种 kind 的常量,避免拼写打错。
@@ -487,6 +502,42 @@ impl MemoryStore {
         Ok(rows)
     }
 
+    /// Return the effective one-hop graph around a fact. `related` and
+    /// `contradicts` are symmetric at the API boundary even though only one source
+    /// markdown file owns the physical edge; `supersedes` preserves direction.
+    pub fn relations(&self, id: &str, limit: usize) -> Result<Vec<RelationSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT CASE WHEN l.src_id = ?1 THEN l.dst_id ELSE l.src_id END AS peer_id,
+                    l.kind,
+                    CASE
+                      WHEN l.kind IN ('related', 'contradicts') THEN 'symmetric'
+                      WHEN l.src_id = ?1 THEN 'outgoing'
+                      ELSE 'incoming'
+                    END AS direction,
+                    f.title,
+                    COALESCE(SUBSTR(f.body, 1, 160), '')
+             FROM links l
+             LEFT JOIN facts f ON f.id = CASE WHEN l.src_id = ?1 THEN l.dst_id ELSE l.src_id END
+             WHERE (l.src_id = ?1 OR l.dst_id = ?1)
+               AND (l.kind = 'supersedes' OR f.deprecated IS NULL OR f.deprecated = 0)
+             ORDER BY CASE l.kind WHEN 'contradicts' THEN 0 WHEN 'supersedes' THEN 1 ELSE 2 END,
+                      peer_id DESC
+             LIMIT ?2",
+        )?;
+        let relations = stmt
+            .query_map(params![id, limit.max(1) as i64], |row| {
+                Ok(RelationSummary {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    direction: row.get(2)?,
+                    title: row.get(3)?,
+                    snippet: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(relations)
+    }
+
     // ─── propose / pending pool ────────────────────────────────────────────
 
     /// agent 提议一条新 fact,进入 pending 队列。
@@ -527,7 +578,6 @@ impl MemoryStore {
         //     (force 是给"语义不同但 embedding 拉不开"的近似误判,完全相同不可能是误判)
         //  B. FTS5 语义近似 score ≥ DUP_THRESHOLD → 判 dup,带 candidates
         //     supersedes / force 任一为真时跳过 B,但仍跑 A
-        let mut auto_related = Vec::new();
         if supersedes.is_none() {
             // A. 完全相同:遍历同 scope 已 deprecated=0 的 fact,比 body
             let normalized = normalize_body(body);
@@ -557,37 +607,41 @@ impl MemoryStore {
                     }));
                 }
             }
+        }
 
-            // B. FTS5 近似(force=true 时跳过)
-            if !force {
-                let scope_str = scope.as_str();
-                let hits = self.search(body, Some(&scope_str), DUP_CANDIDATES_K, false)?;
-                let above_threshold: Vec<_> = hits
+        // Relation discovery is independent from duplicate enforcement. A forced
+        // proposal or explicit supersession still benefits from the same candidates.
+        let scope_str = scope.as_str();
+        let hits = self.search(body, Some(&scope_str), DUP_CANDIDATES_K, false)?;
+        if supersedes.is_none() && !force {
+            let above_threshold: Vec<_> = hits
+                .iter()
+                .filter(|h| h.score >= DUP_THRESHOLD)
+                .cloned()
+                .collect();
+            if let Some(top) = above_threshold.first() {
+                let candidates: Vec<DuplicateCandidate> = above_threshold
                     .iter()
-                    .filter(|h| h.score >= DUP_THRESHOLD)
-                    .cloned()
+                    .map(|h| DuplicateCandidate {
+                        id: h.id.clone(),
+                        similarity: h.score,
+                        snippet: h.snippet.clone(),
+                        scope: h.scope.clone(),
+                        tags: h.tags.clone(),
+                    })
                     .collect();
-                if let Some(top) = above_threshold.first() {
-                    let candidates: Vec<DuplicateCandidate> = above_threshold
-                        .iter()
-                        .map(|h| DuplicateCandidate {
-                            id: h.id.clone(),
-                            similarity: h.score,
-                            snippet: h.snippet.clone(),
-                            scope: h.scope.clone(),
-                            tags: h.tags.clone(),
-                        })
-                        .collect();
-                    return Ok(ProposeResult::Duplicate(DuplicateInfo {
-                        existing_id: top.id.clone(),
-                        similarity: top.score,
-                        snippet: top.snippet.clone(),
-                        candidates,
-                    }));
-                }
-                auto_related = select_auto_related(&hits, &tags);
+                return Ok(ProposeResult::Duplicate(DuplicateInfo {
+                    existing_id: top.id.clone(),
+                    similarity: top.score,
+                    snippet: top.snippet.clone(),
+                    candidates,
+                }));
             }
         }
+        let auto_related: Vec<String> = select_auto_related(&hits, &tags)
+            .into_iter()
+            .filter(|id| supersedes.as_deref() != Some(id.as_str()))
+            .collect();
 
         let id = ulid::Ulid::new().to_string();
         let now_secs = now_secs();
@@ -633,6 +687,15 @@ impl MemoryStore {
                 .scope(scope.as_str())
                 .fact_id(&id),
         );
+        if !pending.meta.related.is_empty() {
+            self.metrics.append(
+                &MetricsEvent::new(EventKind::RelationSuggested)
+                    .author(author)
+                    .scope(scope.as_str())
+                    .fact_id(&id)
+                    .reason(format!("{} related candidates", pending.meta.related.len())),
+            );
+        }
 
         Ok(ProposeResult::Accepted { id })
     }
@@ -677,6 +740,7 @@ impl MemoryStore {
                     body: pending.body,
                 };
                 self.commit_to_facts(&fact)?;
+                self.record_accepted_relations(&fact);
                 self.remove_pending_file(id)?;
                 self.metrics.append(
                     &MetricsEvent::new(EventKind::Approve)
@@ -718,6 +782,7 @@ impl MemoryStore {
                 let final_scope = meta.scope.clone();
                 let fact = Fact { meta, body };
                 self.commit_to_facts(&fact)?;
+                self.record_accepted_relations(&fact);
                 self.remove_pending_file(id)?;
                 self.metrics.append(
                     &MetricsEvent::new(EventKind::EditThenApprove)
@@ -771,6 +836,36 @@ impl MemoryStore {
             let _ = self.deprecate_silent(old_id, "superseded");
         }
         Ok(())
+    }
+
+    fn record_accepted_relations(&self, fact: &Fact) {
+        let count = fact.meta.related.len() + fact.meta.contradicts.len();
+        if count > 0 {
+            self.metrics.append(
+                &MetricsEvent::new(EventKind::RelationAccepted)
+                    .author(&fact.meta.author)
+                    .scope(&fact.meta.scope)
+                    .fact_id(&fact.meta.id)
+                    .reason(format!("{count} relations accepted")),
+            );
+        }
+    }
+
+    pub fn record_relation_followed(&self, from_id: &str, to_id: &str) -> Result<bool> {
+        let exists = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM links WHERE
+               (src_id = ?1 AND dst_id = ?2) OR (src_id = ?2 AND dst_id = ?1))",
+            params![from_id, to_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if exists {
+            self.metrics.append(
+                &MetricsEvent::new(EventKind::RelationFollowed)
+                    .fact_id(to_id)
+                    .hit_id(from_id),
+            );
+        }
+        Ok(exists)
     }
 
     /// 把 fact 插入 SQLite + FTS;不动文件。
@@ -847,6 +942,36 @@ impl MemoryStore {
         self.remove_old_fact_file(id)?;
         let path = fact_path(&self.root, id, fact.meta.title.as_deref());
         std::fs::write(&path, md)?;
+        Ok(())
+    }
+
+    /// Update editable symmetric relations on an approved fact. The owning
+    /// markdown remains the source of truth and the SQLite graph is rebuilt in
+    /// the same commit path used by approval/reconcile.
+    pub fn update_relations(
+        &mut self,
+        id: &str,
+        mut related: Vec<String>,
+        mut contradicts: Vec<String>,
+    ) -> Result<()> {
+        related.retain(|peer| peer != id);
+        contradicts.retain(|peer| peer != id);
+        related.sort();
+        related.dedup();
+        contradicts.sort();
+        contradicts.dedup();
+        if let Some(peer) = related.iter().find(|peer| contradicts.contains(peer)) {
+            anyhow::bail!("fact {peer} cannot be both related and contradicting");
+        }
+        for peer in related.iter().chain(contradicts.iter()) {
+            self.read(peer)
+                .with_context(|| format!("relation target {peer} does not exist"))?;
+        }
+        let mut fact = self.read(id)?;
+        fact.meta.related = related;
+        fact.meta.contradicts = contradicts;
+        self.commit_to_facts(&fact)?;
+        self.record_accepted_relations(&fact);
         Ok(())
     }
 
@@ -957,7 +1082,12 @@ impl MemoryStore {
     pub fn read_with_backlinks(&self, id: &str) -> Result<FactWithBacklinks> {
         let fact = self.read(id)?;
         let backlinks = self.backlinks(id)?;
-        Ok(FactWithBacklinks { fact, backlinks })
+        let relations = self.relations(id, 100)?;
+        Ok(FactWithBacklinks {
+            fact,
+            backlinks,
+            relations,
+        })
     }
 
     /// Phase 10.13:用户在 GUI 点击了某条搜索结果 = 反馈"这条有用"。
@@ -1151,6 +1281,7 @@ impl MemoryStore {
                 kind,
                 subsystem,
                 title,
+                relations: vec![],
             })
         };
 
@@ -1164,6 +1295,9 @@ impl MemoryStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         rows.truncate(opts.top_k);
+        for hit in &mut rows {
+            hit.relations = self.relations(&hit.id, 2)?;
+        }
 
         // metrics 埋点 — 写 search 事件(top_k 是返回数量,不是请求数量)
         let mut ev = MetricsEvent::new(EventKind::Search)
@@ -1278,6 +1412,7 @@ impl MemoryStore {
                     kind,
                     subsystem,
                     title,
+                    relations: vec![],
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1287,6 +1422,9 @@ impl MemoryStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         rows.truncate(opts.top_k);
+        for hit in &mut rows {
+            hit.relations = self.relations(&hit.id, 2)?;
+        }
 
         // metrics 同样埋点(标记走了 fallback — 用 query 字段保留原文,top_k 是返回数)
         let mut ev = MetricsEvent::new(EventKind::Search)
@@ -1339,6 +1477,7 @@ impl MemoryStore {
                     kind: row.get(7)?,
                     subsystem: row.get(8)?,
                     title: row.get(9)?,
+                    relations: vec![],
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1831,6 +1970,7 @@ mod tests {
             kind: "gotcha".into(),
             subsystem: None,
             title: None,
+            relations: vec![],
         }
     }
 
@@ -2534,6 +2674,14 @@ mod tests {
             "expected supersedes backlink, got {:?}",
             bls
         );
+        let from_new = store.relations(&b, 10).unwrap();
+        assert!(from_new
+            .iter()
+            .any(|r| { r.id == a && r.kind == "supersedes" && r.direction == "outgoing" }));
+        let from_old = store.relations(&a, 10).unwrap();
+        assert!(from_old
+            .iter()
+            .any(|r| { r.id == b && r.kind == "supersedes" && r.direction == "incoming" }));
     }
 
     #[test]
@@ -2602,6 +2750,21 @@ mod tests {
         assert!(a_bls.iter().any(|x| x.id == b && x.kind == "related"));
         let c_bls = store.backlinks(&c).unwrap();
         assert!(c_bls.iter().any(|x| x.id == b && x.kind == "contradicts"));
+
+        for anchor in [&a, &b] {
+            let graph = store.relations(anchor, 10).unwrap();
+            let peer = if anchor == &a { &b } else { &a };
+            assert!(graph
+                .iter()
+                .any(|r| { &r.id == peer && r.kind == "related" && r.direction == "symmetric" }));
+        }
+        for anchor in [&c, &b] {
+            let graph = store.relations(anchor, 10).unwrap();
+            let peer = if anchor == &c { &b } else { &c };
+            assert!(graph.iter().any(|r| {
+                &r.id == peer && r.kind == "contradicts" && r.direction == "symmetric"
+            }));
+        }
     }
 
     #[test]
@@ -2664,6 +2827,35 @@ mod tests {
         let r = store.read_with_backlinks(&a).unwrap();
         assert_eq!(r.fact.meta.id, a);
         assert!(r.backlinks.iter().any(|b| b.id == c && b.kind == "related"));
+        assert!(r
+            .relations
+            .iter()
+            .any(|relation| relation.id == c && relation.direction == "symmetric"));
+    }
+
+    #[test]
+    fn approved_fact_relations_can_be_updated_and_removed() {
+        let tmp = TempDir::new().unwrap();
+        let mut store = MemoryStore::open(tmp.path()).unwrap();
+        let a = store
+            .write_for_test("u", None, Scope::Shared, "editable anchor", vec![], None)
+            .unwrap();
+        let b = store
+            .write_for_test("u", None, Scope::Shared, "editable peer", vec![], None)
+            .unwrap();
+
+        store
+            .update_relations(&a, vec![b.clone(), b.clone(), a.clone()], vec![])
+            .unwrap();
+        assert_eq!(store.read(&a).unwrap().meta.related, vec![b.clone()]);
+        assert!(store
+            .relations(&b, 10)
+            .unwrap()
+            .iter()
+            .any(|relation| relation.id == a && relation.direction == "symmetric"));
+
+        store.update_relations(&a, vec![], vec![]).unwrap();
+        assert!(store.relations(&b, 10).unwrap().is_empty());
     }
 
     #[test]

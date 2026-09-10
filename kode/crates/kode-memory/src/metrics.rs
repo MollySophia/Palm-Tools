@@ -45,6 +45,9 @@ pub enum EventKind {
     Search,
     /// 用户在 GUI Browse 点击了某条结果(召回反馈)
     RecallClicked,
+    RelationSuggested,
+    RelationAccepted,
+    RelationFollowed,
     /// 用户/系统 deprecate 一条 fact
     Deprecate,
 }
@@ -59,6 +62,9 @@ impl EventKind {
             Self::Blacklist => "blacklist",
             Self::Search => "search",
             Self::RecallClicked => "recall_clicked",
+            Self::RelationSuggested => "relation_suggested",
+            Self::RelationAccepted => "relation_accepted",
+            Self::RelationFollowed => "relation_followed",
             Self::Deprecate => "deprecate",
         }
     }
