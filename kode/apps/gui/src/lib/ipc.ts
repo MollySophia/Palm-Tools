@@ -856,6 +856,8 @@ export interface CloudDeployReq {
   server_url: string
   deployment_kind: 'standalone' | 'docker'
   remote_deploy_dir: string | null
+  update_existing: boolean
+  reset_existing: boolean
 }
 
 export interface CloudDeployResult {

@@ -38,7 +38,7 @@
   let pairing = $state<CloudPairingPayload | null>(null)
   let view = $state<View>('pair')
   let deployMode = $state<DeployMode>('ssh')
-  let sshDeployKind = $state<SshDeployKind>('standalone')
+  let sshDeployKind = $state<SshDeployKind>('docker')
   let redeployBackendId = $state('')
   let selectedBackendId = $state('')
   let busy = $state<BusyKind>('')
@@ -52,6 +52,7 @@
   let remotePort = $state('8787')
   let publicUrl = $state('')
   let remoteDeployDir = $state('')
+  let resetExisting = $state(false)
   let existingUrl = $state('')
   let deploySteps = $state(
     DEPLOY_STEPS.map((step) => ({ step, status: 'pending' as StepStatus })),
@@ -217,11 +218,6 @@
       error = tr('pairing.deploy.portInvalid')
       return
     }
-    if (sshDeployKind === 'docker' && !remoteDeployDir.trim()) {
-      error = tr('pairing.deploy.remoteDirRequired')
-      remoteDeployDirInput?.focus()
-      return
-    }
     if (!validHttpsOrigin(publicUrl)) {
       error = tr('pairing.deploy.urlInvalid')
       publicUrlInput?.focus()
@@ -241,6 +237,8 @@
         server_url: publicUrl.trim(),
         deployment_kind: sshDeployKind,
         remote_deploy_dir: sshDeployKind === 'docker' ? remoteDeployDir.trim() : null,
+        update_existing: redeployingCurrent,
+        reset_existing: !redeployingCurrent && resetExisting,
       })
       await refreshStatus()
       selectedBackendId = result.backend.id
@@ -283,13 +281,14 @@
     if (busy) return
     redeployBackendId = ''
     deployMode = 'ssh'
-    sshDeployKind = 'standalone'
+    sshDeployKind = 'docker'
     backendName = ''
     sshHost = ''
     sshPort = '22'
     remotePort = '8787'
     publicUrl = ''
     remoteDeployDir = ''
+    resetExisting = false
     resetDeploySteps()
     view = 'deploy'
     pairing = null
@@ -308,7 +307,8 @@
     remotePort = String(backend.remote_port ?? 8787)
     publicUrl = backend.server_url
     remoteDeployDir =
-      backend.remote_deploy_dir ?? '~/kode-sync-server-0.2.2-dev-linux-amd64'
+      backend.remote_deploy_dir ?? '~/.local/kode-sync-docker'
+    resetExisting = false
     resetDeploySteps()
     view = 'deploy'
     pairing = null
@@ -638,7 +638,7 @@
                     bind:this={remoteDeployDirInput}
                     type="text"
                     bind:value={remoteDeployDir}
-                    placeholder="~/kode-sync-server-0.2.2-dev-linux-amd64"
+                    placeholder="~/.local/kode-sync-docker"
                     autocomplete="off"
                     autocapitalize="none"
                     spellcheck="false"
@@ -646,6 +646,16 @@
                   />
                   <p>{tr('pairing.deploy.remoteDirHint')}</p>
                 </div>
+              {/if}
+
+              {#if !redeployingCurrent}
+                <label class="clean-install">
+                  <input type="checkbox" bind:checked={resetExisting} disabled={Boolean(busy)} />
+                  <span>
+                    <strong>{tr('pairing.deploy.cleanInstall')}</strong>
+                    <small>{tr(`pairing.deploy.cleanInstallHint.${sshDeployKind}`)}</small>
+                  </span>
+                </label>
               {/if}
 
               <div class="field">
@@ -981,6 +991,20 @@
     color: var(--fg-primary);
     font: var(--fs-sm) var(--font-mono);
   }
+  .clean-install {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    border-left: 3px solid var(--st-warn);
+    background: color-mix(in srgb, var(--st-warn) 7%, var(--bg-input));
+    padding: var(--sp-2) var(--sp-3);
+    color: var(--fg-secondary);
+    cursor: pointer;
+  }
+  .clean-install input { margin: 2px 0 0; accent-color: var(--st-warn); }
+  .clean-install span { display: grid; gap: 2px; }
+  .clean-install strong { color: var(--fg-primary); font-size: var(--fs-xs); }
+  .clean-install small { color: var(--fg-tertiary); font-size: var(--fs-xs); line-height: 1.4; }
   .field input:focus-visible { border-color: var(--acc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 18%, transparent); }
   .field input[aria-invalid='true'] { border-color: var(--st-err); }
   .field p { color: var(--fg-tertiary); font-size: var(--fs-xs); line-height: 1.4; }

@@ -2,9 +2,10 @@
 //!
 //! The app ships a static Linux `kode-sync-server` archive and reuses the
 //! existing system ssh/scp path, so aliases, keys, and ssh-agent continue to
-//! work exactly like Remote Bridge deployment. Public TLS remains owned by the
-//! user's ingress; this installer deploys and verifies the Rust service behind
-//! that HTTPS origin.
+//! work exactly like Remote Bridge deployment. Docker mode is self-contained:
+//! on an empty host it creates the Compose/Caddy package and starts the public
+//! HTTP(S) ingress; on a managed or legacy package it updates in place without
+//! removing the persistent data volume.
 
 use std::{path::Path, time::Duration};
 
@@ -20,9 +21,10 @@ use crate::{
 const TARBALL_RESOURCE: &str = "resources/kode-sync-server-linux-musl.tar.gz";
 const REMOTE_TARBALL: &str = "/tmp/kode-sync-server-deploy.tar.gz";
 const REMOTE_INSTALL_DIR: &str = ".local/kode-sync-server";
+const DEFAULT_REMOTE_DOCKER_DIR: &str = "~/.local/kode-sync-docker";
 const PUBLIC_HEALTH_PATH: &str = "/api/v1/healthz";
 const LOCAL_HEALTH_RETRIES: u32 = 8;
-const PUBLIC_HEALTH_RETRIES: u32 = 6;
+const PUBLIC_HEALTH_RETRIES: u32 = 20;
 
 #[derive(Debug, Deserialize)]
 pub struct CloudDeployReq {
@@ -37,10 +39,14 @@ pub struct CloudDeployReq {
     pub deployment_kind: String,
     #[serde(default)]
     pub remote_deploy_dir: Option<String>,
+    #[serde(default)]
+    pub update_existing: bool,
+    #[serde(default)]
+    pub reset_existing: bool,
 }
 
 fn default_deployment_kind() -> String {
-    "standalone".into()
+    "docker".into()
 }
 
 fn default_ssh_port() -> u16 {
@@ -94,9 +100,15 @@ pub async fn deploy_cloud_sync(
     if !matches!(deployment_kind, "standalone" | "docker") {
         return Err("deployment kind must be standalone or docker".into());
     }
+    if req.update_existing && req.reset_existing {
+        return Err("upgrade and clean install cannot be requested together".into());
+    }
     let remote_deploy_dir = if deployment_kind == "docker" {
         Some(validate_remote_deploy_dir(
-            req.remote_deploy_dir.as_deref().unwrap_or_default(),
+            req.remote_deploy_dir
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(DEFAULT_REMOTE_DOCKER_DIR),
         )?)
     } else {
         None
@@ -104,12 +116,13 @@ pub async fn deploy_cloud_sync(
 
     emit(&app, "CheckingHost", "running", "checking the remote host");
     let preflight = if let Some(remote_dir) = &remote_deploy_dir {
-        format!(
-            "set -e; arch=$(uname -m); case \"$arch\" in x86_64|amd64) ;; *) echo \"unsupported architecture: $arch (expected x86_64)\" >&2; exit 2 ;; esac; command -v tar >/dev/null; command -v sha256sum >/dev/null; command -v docker >/dev/null; deploy_dir={}; test -x \"$deploy_dir/deploy.sh\"; test -f \"$deploy_dir/docker-compose.yml\"; test -f \"$deploy_dir/Dockerfile\"; test -d \"$deploy_dir/bin\"; docker compose version >/dev/null",
-            remote_dir.shell_expr
-        )
+        docker_preflight_command(remote_dir, req.update_existing, req.reset_existing)
     } else {
-        "set -e; arch=$(uname -m); case \"$arch\" in x86_64|amd64) ;; *) echo \"unsupported architecture: $arch (expected x86_64)\" >&2; exit 2 ;; esac; command -v tar >/dev/null; command -v curl >/dev/null; command -v nohup >/dev/null; command -v readlink >/dev/null; command -v sleep >/dev/null".into()
+        format!(
+            "set -e; arch=$(uname -m); case \"$arch\" in x86_64|amd64) ;; *) echo \"unsupported architecture: $arch (expected x86_64)\" >&2; exit 2 ;; esac; command -v tar >/dev/null; command -v curl >/dev/null; command -v nohup >/dev/null; command -v readlink >/dev/null; command -v sleep >/dev/null; install_dir=$HOME/{REMOTE_INSTALL_DIR}; if [ \"{}\" != 1 ] && [ \"{}\" != 1 ] && [ -e \"$install_dir/bin/kode-sync-server\" ]; then echo \"a standalone Kode sync installation already exists; choose Upgrade or enable clean install\" >&2; exit 2; fi",
+            u8::from(req.update_existing),
+            u8::from(req.reset_existing),
+        )
     };
     run_ssh(&ssh_host, req.ssh_port, &preflight)
         .map_err(|error| fail(&app, "CheckingHost", "remote host check failed", error))?;
@@ -127,29 +140,47 @@ pub async fn deploy_cloud_sync(
             "running",
             "preparing Docker package update",
         );
-        emit(&app, "StoppingOld", "done", "Docker deployment found");
+        emit(
+            &app,
+            "StoppingOld",
+            "done",
+            "Docker deployment ready (existing or new)",
+        );
         emit(
             &app,
             "Extracting",
             "running",
             "replacing sync-server binary",
         );
-        let update = format!(
-            "set -e; deploy_dir={}; stage=$(mktemp -d /tmp/kode-sync-update.XXXXXX); trap 'rm -rf \"$stage\"' EXIT; tar -xzf {} -C \"$stage\"; test -x \"$stage/bin/kode-sync-server\"; install -m 0755 \"$stage/bin/kode-sync-server\" \"$deploy_dir/bin/kode-sync-server.new\"; mv -f \"$deploy_dir/bin/kode-sync-server.new\" \"$deploy_dir/bin/kode-sync-server\"; cd \"$deploy_dir\"; sha256sum bin/kode-sync-server > SHA256SUMS; ./deploy.sh verify",
-            remote_dir.shell_expr,
-            shell_quote(REMOTE_TARBALL)
-        );
+        let update = docker_install_command(
+            remote_dir,
+            REMOTE_TARBALL,
+            &server_url,
+            req.update_existing,
+            req.reset_existing,
+        )?;
         run_ssh(&ssh_host, req.ssh_port, &update)
             .map_err(|error| fail(&app, "Extracting", "Docker package update failed", error))?;
-        emit(&app, "Extracting", "done", "binary and checksum updated");
+        emit(
+            &app,
+            "Extracting",
+            "done",
+            "Docker package installed or updated",
+        );
 
         emit(&app, "StartingNew", "running", "rebuilding Docker service");
         let start = format!(
             "set -e; deploy_dir={}; cd \"$deploy_dir\"; ./deploy.sh up",
             remote_dir.shell_expr
         );
-        run_ssh(&ssh_host, req.ssh_port, &start)
-            .map_err(|error| fail(&app, "StartingNew", "Docker deployment failed", error))?;
+        run_ssh(&ssh_host, req.ssh_port, &start).map_err(|error| {
+            fail(
+                &app,
+                "StartingNew",
+                "Docker deployment failed",
+                explain_docker_start_error(error),
+            )
+        })?;
         emit(&app, "StartingNew", "done", "Docker service rebuilt");
     } else {
         emit(&app, "StoppingOld", "running", "stopping previous service");
@@ -160,6 +191,15 @@ pub async fn deploy_cloud_sync(
     )
     .map_err(|error| fail(&app, "StoppingOld", "stop failed", error))?;
         emit(&app, "StoppingOld", "done", "stopped (or none was running)");
+
+        if req.reset_existing && !req.update_existing {
+            run_ssh(
+                &ssh_host,
+                req.ssh_port,
+                &format!("rm -rf \"$HOME/{REMOTE_INSTALL_DIR}\""),
+            )
+            .map_err(|error| fail(&app, "StoppingOld", "clean install failed", error))?;
+        }
 
         emit(&app, "Extracting", "running", "installing service bundle");
         let extract = format!(
@@ -199,8 +239,9 @@ pub async fn deploy_cloud_sync(
     );
     let local_health = if let Some(remote_dir) = &remote_deploy_dir {
         format!(
-            "set -e; deploy_dir={}; cd \"$deploy_dir\"; container=$(docker compose --env-file .env -f docker-compose.yml ps -q sync-server); test -n \"$container\"; state=$(docker inspect --format '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' \"$container\"); case \"$state\" in healthy|running) ;; *) echo \"container state: $state\" >&2; exit 1 ;; esac",
-            remote_dir.shell_expr
+            "set -e; {}; deploy_dir={}; cd \"$deploy_dir\"; container=$(compose --env-file .env -f docker-compose.yml ps -q sync-server); test -n \"$container\"; state=$(docker inspect --format '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' \"$container\"); case \"$state\" in healthy|running) ;; *) echo \"container state: $state\" >&2; exit 1 ;; esac",
+            compose_shell_function(),
+            remote_dir.shell_expr,
         )
     } else {
         format!(
@@ -288,7 +329,26 @@ pub async fn deploy_cloud_sync(
                     Err(error) => public_error = format!("could not read health response: {error}"),
                 }
             }
-            Ok(response) => public_error = format!("HTTP {}", response.status()),
+            Ok(response) => {
+                let status = response.status();
+                let aio_forward = response
+                    .headers()
+                    .get("x-proxy-by")
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("AIO-Forward"));
+                public_error = if status == reqwest::StatusCode::BAD_GATEWAY && aio_forward {
+                    if deployment_kind == "docker" {
+                        "HTTP 502 from DevCloud/AIO: the gateway could not connect to this host. Kode installed Caddy on HTTP port 80; configure the AIO upstream to use HTTP port 80 and allow that port".into()
+                    } else {
+                        format!(
+                            "HTTP 502 from DevCloud/AIO: the gateway could not connect to this host. Configure its HTTP upstream to port {} or use Docker + Caddy deployment",
+                            req.remote_port
+                        )
+                    }
+                } else {
+                    format!("HTTP {status}")
+                };
+            }
             Err(error) => public_error = error.to_string(),
         }
         if attempt < PUBLIC_HEALTH_RETRIES {
@@ -360,6 +420,131 @@ fn non_empty_file(path: &Path) -> bool {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn docker_install_command(
+    remote_dir: &RemoteDeployDir,
+    remote_tarball: &str,
+    server_url: &str,
+    update_existing: bool,
+    reset_existing: bool,
+) -> Result<String, String> {
+    let domain = url::Url::parse(server_url)
+        .map_err(|error| format!("invalid public sync URL: {error}"))?
+        .host_str()
+        .ok_or_else(|| "the public sync URL has no hostname".to_string())?
+        .to_string();
+    let devcloud = domain.ends_with(".devcloud.woa.com");
+    let caddyfile = if devcloud {
+        format!(
+            "http://{domain} {{\n  encode zstd gzip\n  reverse_proxy sync-server:8787\n  header {{\n    Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n    X-Content-Type-Options \"nosniff\"\n    Referrer-Policy \"no-referrer\"\n    -Server\n  }}\n}}\n"
+        )
+    } else {
+        format!(
+            "{domain} {{\n  encode zstd gzip\n  reverse_proxy sync-server:8787\n  header {{\n    Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n    X-Content-Type-Options \"nosniff\"\n    Referrer-Policy \"no-referrer\"\n    -Server\n  }}\n}}\n"
+        )
+    };
+    let dockerfile = r#"FROM alpine:3.22
+RUN apk add --no-cache ca-certificates curl && install -d /data
+COPY bin/kode-sync-server /usr/local/bin/kode-sync-server
+RUN chmod 0755 /usr/local/bin/kode-sync-server
+EXPOSE 8787
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=6 CMD curl -fsS http://127.0.0.1:8787/healthz || exit 1
+ENTRYPOINT ["/usr/local/bin/kode-sync-server"]
+"#;
+    let compose = r#"services:
+  sync-server:
+    build: { context: ., dockerfile: Dockerfile }
+    image: kode-sync-server:local
+    restart: unless-stopped
+    user: "${KODE_SYNC_UID}:${KODE_SYNC_GID}"
+    environment:
+      KODE_SYNC_BIND: 0.0.0.0:8787
+      KODE_SYNC_DATABASE: /data/kode-sync.db
+      KODE_SYNC_PUBLIC_URL: https://${KODE_SYNC_DOMAIN}
+      RUST_LOG: ${KODE_SYNC_LOG:-info,kode_sync_server=info}
+    volumes: ["./data/sync:/data"]
+    networks: [kode-sync]
+    expose: ["8787"]
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      sync-server: { condition: service_healthy }
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy-data:/data
+      - ./data/caddy-config:/config
+    networks: [kode-sync]
+networks:
+  kode-sync:
+"#;
+    let deploy_script = format!(
+        r#"#!/bin/sh
+set -eu
+{}
+action=${{1:-up}}
+case "$action" in
+  verify) test -x bin/kode-sync-server; compose config -q ;;
+  up) compose up -d --build ;;
+  status) compose ps ;;
+  logs) compose logs --tail=200 -f ;;
+  down) compose down ;;
+  *) echo "usage: $0 verify|up|status|logs|down" >&2; exit 2 ;;
+esac
+"#,
+        compose_shell_function()
+    );
+    let env_file = format!("KODE_SYNC_DOMAIN={domain}\nKODE_SYNC_LOG=info,kode_sync_server=info\n");
+
+    let clean_install = reset_existing && !update_existing;
+    Ok(format!(
+        "set -e; {}; deploy_dir={}; if [ \"{}\" = 1 ] && [ -d \"$deploy_dir\" ]; then if [ -f \"$deploy_dir/docker-compose.yml\" ]; then cd \"$deploy_dir\"; compose --env-file .env -f docker-compose.yml down -v --remove-orphans || true; fi; rm -rf \"$deploy_dir\"; fi; mkdir -p \"$deploy_dir/bin\"; stage=$(mktemp -d /tmp/kode-sync-update.XXXXXX); trap 'rm -rf \"$stage\"' EXIT; tar -xzf {} -C \"$stage\"; test -x \"$stage/bin/kode-sync-server\"; install -m 0755 \"$stage/bin/kode-sync-server\" \"$deploy_dir/bin/kode-sync-server.new\"; mv -f \"$deploy_dir/bin/kode-sync-server.new\" \"$deploy_dir/bin/kode-sync-server\"; if [ ! -f \"$deploy_dir/.kode-managed-deployment\" ] && [ -x \"$deploy_dir/deploy.sh\" ]; then cd \"$deploy_dir\"; sha256sum bin/kode-sync-server > SHA256SUMS; compose --env-file .env -f docker-compose.yml config -q; else mkdir -p \"$deploy_dir/data/sync\" \"$deploy_dir/data/caddy-data\" \"$deploy_dir/data/caddy-config\"; printf %s {} > \"$deploy_dir/Dockerfile\"; printf %s {} > \"$deploy_dir/docker-compose.yml\"; printf %s {} > \"$deploy_dir/Caddyfile\"; printf %s {} > \"$deploy_dir/.env\"; printf 'KODE_SYNC_UID=%s\\nKODE_SYNC_GID=%s\\n' \"$(id -u)\" \"$(id -g)\" >> \"$deploy_dir/.env\"; chmod 600 \"$deploy_dir/.env\"; printf %s {} > \"$deploy_dir/deploy.sh\"; chmod 0755 \"$deploy_dir/deploy.sh\"; : > \"$deploy_dir/.kode-managed-deployment\"; cd \"$deploy_dir\"; sha256sum bin/kode-sync-server > SHA256SUMS; ./deploy.sh verify; fi",
+        compose_shell_function(),
+        remote_dir.shell_expr,
+        u8::from(clean_install),
+        shell_quote(remote_tarball),
+        shell_quote(dockerfile),
+        shell_quote(compose),
+        shell_quote(&caddyfile),
+        shell_quote(&env_file),
+        shell_quote(&deploy_script),
+    ))
+}
+
+fn docker_preflight_command(
+    remote_dir: &RemoteDeployDir,
+    update_existing: bool,
+    reset_existing: bool,
+) -> String {
+    let existing_policy = if update_existing {
+        "test -x \"$deploy_dir/deploy.sh\" && test -f \"$deploy_dir/docker-compose.yml\" && test -f \"$deploy_dir/Dockerfile\" && test -d \"$deploy_dir/bin\" || { echo \"the saved Docker deployment is incomplete; use a new clean install to replace it\" >&2; exit 2; }"
+    } else if reset_existing {
+        ":"
+    } else {
+        "if [ -d \"$deploy_dir\" ] && [ -n \"$(find \"$deploy_dir\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then echo \"the target directory is not empty; enable clean install to replace it or choose Upgrade\" >&2; exit 2; fi"
+    };
+    format!(
+        "set -e; arch=$(uname -m); case \"$arch\" in x86_64|amd64) ;; *) echo \"unsupported architecture: $arch (expected x86_64)\" >&2; exit 2 ;; esac; command -v tar >/dev/null; command -v sha256sum >/dev/null; command -v docker >/dev/null; if ! docker info >/dev/null 2>&1; then echo \"Docker daemon is unavailable; start it with: systemctl enable --now docker\" >&2; exit 2; fi; {}; compose version >/dev/null; deploy_dir={}; {}",
+        compose_shell_function(),
+        remote_dir.shell_expr,
+        existing_policy
+    )
+}
+
+fn compose_shell_function() -> &'static str {
+    r#"compose() { if docker compose version >/dev/null 2>&1; then docker compose "$@"; elif command -v docker-compose >/dev/null 2>&1; then docker-compose "$@"; else echo "Docker Compose is missing; install the Compose v2 plugin or docker-compose v1" >&2; return 127; fi; }"#
+}
+
+fn explain_docker_start_error(error: String) -> String {
+    if error.contains("authorization denied by plugin hbm") {
+        format!(
+            "the managed Docker policy rejected access to the deployment storage directory. Allow bind mounts for the selected remote installation directory, or deploy as a standalone service. Details: {error}"
+        )
+    } else {
+        error
+    }
 }
 
 struct RemoteDeployDir {
@@ -442,5 +627,86 @@ mod tests {
         assert!(validate_remote_deploy_dir("relative/path").is_err());
         assert!(validate_remote_deploy_dir("~/../escape").is_err());
         assert!(validate_remote_deploy_dir("~/bad;command").is_err());
+    }
+
+    #[test]
+    fn docker_bootstrap_uses_http_caddy_for_devcloud() {
+        let dir = validate_remote_deploy_dir(DEFAULT_REMOTE_DOCKER_DIR).unwrap();
+        let command = docker_install_command(
+            &dir,
+            REMOTE_TARBALL,
+            "https://developer-any5.devcloud.woa.com",
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(command.contains("http://developer-any5.devcloud.woa.com"));
+        assert!(command.contains("reverse_proxy sync-server:8787"));
+        assert!(command.contains("80:80"));
+        assert!(command.contains(".kode-managed-deployment"));
+        assert!(command.contains("./data/sync:/data"));
+        assert!(command.contains("./data/caddy-data:/data"));
+        assert!(!command.contains("kode-sync-data:/data"));
+    }
+
+    #[test]
+    fn docker_bootstrap_uses_caddy_https_for_public_vps() {
+        let dir = validate_remote_deploy_dir("/srv/kode-sync").unwrap();
+        let command = docker_install_command(
+            &dir,
+            REMOTE_TARBALL,
+            "https://sync.example.com",
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(command.contains("sync.example.com {"));
+        assert!(!command.contains("http://sync.example.com"));
+    }
+
+    #[test]
+    fn clean_docker_install_removes_old_stack_and_volumes() {
+        let dir = validate_remote_deploy_dir(DEFAULT_REMOTE_DOCKER_DIR).unwrap();
+        let command = docker_install_command(
+            &dir,
+            REMOTE_TARBALL,
+            "https://sync.example.com",
+            false,
+            true,
+        )
+        .unwrap();
+        assert!(command
+            .contains("compose --env-file .env -f docker-compose.yml down -v --remove-orphans"));
+        assert!(command.contains("rm -rf \"$deploy_dir\""));
+    }
+
+    #[test]
+    fn upgrade_requires_a_complete_docker_package() {
+        let dir = validate_remote_deploy_dir(DEFAULT_REMOTE_DOCKER_DIR).unwrap();
+        let command = docker_preflight_command(&dir, true, false);
+        assert!(command.contains("the saved Docker deployment is incomplete"));
+        assert!(command.contains("test -x \"$deploy_dir/deploy.sh\""));
+    }
+
+    #[test]
+    fn docker_commands_support_compose_v2_and_v1() {
+        let function = compose_shell_function();
+        assert!(function.contains("docker compose version"));
+        assert!(function.contains("command -v docker-compose"));
+        assert!(function.contains("docker-compose \"$@\""));
+        let dir = validate_remote_deploy_dir(DEFAULT_REMOTE_DOCKER_DIR).unwrap();
+        let preflight = docker_preflight_command(&dir, false, false);
+        assert!(preflight.contains("compose version"));
+        assert!(!preflight.contains("docker compose version >/dev/null;"));
+        assert!(preflight.contains("Docker daemon is unavailable"));
+    }
+
+    #[test]
+    fn explains_managed_docker_mount_rejection() {
+        let message = explain_docker_start_error(
+            "authorization denied by plugin hbm: Volume example:/data:rw is not allowed".into(),
+        );
+        assert!(message.contains("managed Docker policy"));
+        assert!(message.contains("standalone service"));
     }
 }
