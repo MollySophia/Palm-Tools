@@ -1316,7 +1316,7 @@ impl std::error::Error for TextInputError {}
 /// otherwise classify one combined write as a paste and leave the text in the
 /// composer without submitting it. Cloud command routing calls this same path
 /// so direct-bridge and centralized mobile input remain behaviorally identical.
-pub fn submit_text_input(ctx: &Ctx, id: SessionId, text: &str) -> Result<(), TextInputError> {
+pub async fn submit_text_input(ctx: &Ctx, id: SessionId, text: &str) -> Result<(), TextInputError> {
     let body = text_input_body(text);
     let enter_writer = {
         let mut sessions = ctx.sessions.lock();
@@ -1335,21 +1335,8 @@ pub fn submit_text_input(ctx: &Ctx, id: SessionId, text: &str) -> Result<(), Tex
     };
 
     if let Some(writer) = enter_writer {
-        std::thread::spawn(move || {
-            std::thread::sleep(TEXT_INPUT_SUBMIT_DELAY);
-            tracing::debug!(session = id, "bridge input write enter");
-            match writer.lock() {
-                Ok(mut writer) => {
-                    if let Err(error) = writer.write_all(b"\r") {
-                        tracing::warn!(?error, session = id, "bridge input enter failed");
-                    }
-                    let _ = writer.flush();
-                }
-                Err(error) => {
-                    tracing::warn!(?error, session = id, "bridge input writer poisoned");
-                }
-            }
-        });
+        tokio::time::sleep(TEXT_INPUT_SUBMIT_DELAY).await;
+        write_text_input_enter(&writer, id)?;
     }
 
     ctx.bus.emit(EventEnvelope::new(
@@ -1364,6 +1351,25 @@ pub fn submit_text_input(ctx: &Ctx, id: SessionId, text: &str) -> Result<(), Tex
         }),
     ));
     Ok(())
+}
+
+fn write_text_input_enter(
+    writer: &kode_core::pty::PtyWriter,
+    id: SessionId,
+) -> Result<(), TextInputError> {
+    tracing::debug!(session = id, "bridge input write enter");
+    let mut writer = writer.lock().map_err(|error| {
+        tracing::warn!(?error, session = id, "bridge input writer poisoned");
+        TextInputError { session_id: id }
+    })?;
+    writer.write_all(b"\r").map_err(|error| {
+        tracing::warn!(?error, session = id, "bridge input enter failed");
+        TextInputError { session_id: id }
+    })?;
+    writer.flush().map_err(|error| {
+        tracing::warn!(?error, session = id, "bridge input enter flush failed");
+        TextInputError { session_id: id }
+    })
 }
 
 async fn post_focus(
@@ -1392,22 +1398,21 @@ async fn post_input(
     Path(id): Path<SessionId>,
     Json(req): Json<InputReq>,
 ) -> Result<StatusCode, ApiError> {
-    let g = ctx.sessions.lock();
-    let s = g
-        .get(&id)
-        .ok_or_else(|| ApiError::NotFound(format!("session {id}")))?;
-
     match (req.bytes_b64, req.text) {
         // 原始字节路径用于控制键和高级序列，保持完全透传。
         (Some(b64), _) => {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(b64)
                 .map_err(|e| ApiError::BadRequest(format!("invalid base64: {e}")))?;
+            let sessions = ctx.sessions.lock();
+            let s = sessions
+                .get(&id)
+                .ok_or_else(|| ApiError::NotFound(format!("session {id}")))?;
             s.write_input(&bytes);
         }
         (None, Some(text)) => {
-            drop(g);
             submit_text_input(&ctx, id, &text)
+                .await
                 .map_err(|_| ApiError::NotFound(format!("session {id}")))?;
         }
         (None, None) => {

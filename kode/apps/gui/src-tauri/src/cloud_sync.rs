@@ -714,14 +714,14 @@ impl CloudSyncManager {
         self.send_command_result(socket, &command_id, "accepted", None)
             .await?;
         let result = match kind.as_str() {
-            "input" => payload
-                .get("text")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "input command is missing text".to_string())
-                .and_then(|text| {
+            "input" => match payload.get("text").and_then(Value::as_str) {
+                Some(text) => {
                     kode_bridge::submit_text_input(&self.inner.ctx, local_session_id, text)
+                        .await
                         .map_err(|error| error.to_string())
-                }),
+                }
+                None => Err("input command is missing text".into()),
+            },
             "answer" => match payload.get("choice_index").and_then(Value::as_u64) {
                 Some(choice) => {
                     let submit = payload

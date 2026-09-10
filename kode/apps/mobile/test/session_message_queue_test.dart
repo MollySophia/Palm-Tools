@@ -271,6 +271,46 @@ void main() {
     expect(find.text('PROCESSED'), findsOneWidget);
   });
 
+  testWidgets('repeated user text keeps both message bubbles after sync', (
+    tester,
+  ) async {
+    final api = _FakeApiClient();
+    final events = StreamController<Envelope>();
+    addTearDown(events.close);
+    final container = ProviderContainer(
+      overrides: [
+        apiClientProvider.overrideWithValue(api),
+        eventStreamProvider.overrideWith((ref) => events.stream),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: KillLaTheme.light(),
+          home: const SessionDetailScreen(sessionId: 7),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    Future<void> sendRepeatedMessage() async {
+      await tester.enterText(find.byType(TextField), 'same message');
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pump();
+      events.add(_userMessageEvent('same message'));
+      await tester.pump();
+    }
+
+    await sendRepeatedMessage();
+    await sendRepeatedMessage();
+
+    expect(find.text('same message'), findsNWidgets(2));
+    expect(find.text('PROCESSED'), findsNWidgets(2));
+  });
+
   testWidgets('tapping outside the composer dismisses the software keyboard', (
     tester,
   ) async {

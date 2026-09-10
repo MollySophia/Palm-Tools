@@ -454,9 +454,17 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     );
     final canonicalIndex = _byKey[incoming.key];
     if (canonicalIndex != null && canonicalIndex != optimisticIndex) {
-      _items.removeAt(optimisticIndex);
+      // Semantic ids are content-derived, so two genuine user messages with
+      // identical text share the same canonical key. Keep the optimistic
+      // occurrence's outbound id in its key instead of deleting it and
+      // overwriting the older canonical message.
+      _items[optimisticIndex] = _Item(
+        key: '${incoming.key}-outbound-${outboundId ?? optimistic.ts}',
+        type: reconciled.type,
+        ts: reconciled.ts,
+        payload: reconciled.payload,
+      );
       _reindexItems();
-      _upsert(reconciled);
     } else {
       _items[optimisticIndex] = reconciled;
       _reindexItems();
