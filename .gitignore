@@ -3,6 +3,7 @@ target/
 
 kode/target
 kode/.pnpm-store
+kode/.tauri/
 kode/node_modules
 kode/.codebuddy/scheduled_tasks.lock
 kode/apps/gui/node_modules

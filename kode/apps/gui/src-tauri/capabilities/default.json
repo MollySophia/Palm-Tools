@@ -29,6 +29,8 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "process:allow-restart",
+    "updater:default"
   ]
 }

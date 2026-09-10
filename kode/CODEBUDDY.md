@@ -193,6 +193,8 @@ flutter test
 - `apps/gui/src-tauri/resources/kode-remote-memory-bridge-linux-musl.tar.gz` 不存在时,脚本会跳过该 resource 继续打包;需要带上远端 memory bridge 时先跑 `bash deploy/build-remote-memory-bridge.sh --musl`。
 - 自助 SSH 云同步部署依赖 `apps/gui/src-tauri/resources/kode-sync-server-linux-musl.tar.gz`;发布前先跑 `bash deploy/build-sync-server.sh`,把 x86_64 Linux 静态服务包嵌入 App。缺少该包时 GUI 仍可连接已有服务,但不能执行自动部署。
 - 没有 Developer ID 证书的机器会自动走 ad-hoc 签名并跳过 DMG,这是本地调试的正常路径。
+- GitHub Release 的应用内更新包使用独立的 Tauri minisign 密钥。公钥固化在 `tauri.conf.json`;私钥只保存在本机忽略目录 `.tauri/kode-updater.key`,并必须备份到安全的密码管理器后配置为仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`。若未来改用带密码的私钥,同时配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。丢失私钥会导致已安装版本无法再接受更新。
+- 推送 `v*` tag 时,Release workflow 会把 tag 写入 Cargo、GUI package 和 Tauri bundle 版本,为 arm64 / x86_64 生成签名更新包与 `latest.json`。不要手工上传未签名包覆盖这些资产。
 - `./run.sh dev` 会先构建 `apps/specops` 开发产物,确保 GUI 内嵌 SpecOps sidecar 可用。
 
 ## 修改前检查

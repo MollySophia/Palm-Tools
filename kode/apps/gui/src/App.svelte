@@ -47,6 +47,7 @@
   import AvatarPicker from './lib/AvatarPicker.svelte'
   import EventCenter from './lib/EventCenter.svelte'
   import ToastHost from './lib/ToastHost.svelte'
+  import UpdateButton from './lib/UpdateButton.svelte'
   import ScreenshotEditor, { type ScreenshotDraft, type ScreenshotCrop } from './lib/ScreenshotEditor.svelte'
   import { avatarLibrary, loadAvatarLibrary, type AvatarStatus } from './lib/avatars'
   import {
@@ -1907,6 +1908,7 @@
         <strong>{topbarTitle}</strong>
       </div>
       <div class="titlebar-actions">
+        <UpdateButton />
         <EventCenter />
         <!-- 打开 inspector 的按钮只在关闭时显示;收起由右边栏顶部那一排的关闭按钮负责 -->
         {#if !workspacePanelOpen}

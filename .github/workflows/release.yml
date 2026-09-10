@@ -69,6 +69,8 @@ jobs:
             expected_macho: x86_64
     env:
       APPLE_SIGNING_AVAILABLE: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 != '' && secrets.APPLE_DEVELOPER_ID_P12_PASSWORD != '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v6
@@ -129,6 +131,36 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
 
+      - name: Set application version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_VERSION#v}"
+          VERSION="$version" python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          cargo = Path("kode/Cargo.toml")
+          cargo.write_text(re.sub(
+              r'(?ms)^(\[workspace\.package\]\n.*?^version = ")[^"]+(")',
+              rf'\g<1>{version}\2',
+              cargo.read_text(),
+              count=1,
+          ))
+          for filename in (
+              Path("kode/apps/gui/package.json"),
+              Path("kode/apps/gui/src-tauri/tauri.conf.json"),
+          ):
+              data = json.loads(filename.read_text())
+              data["version"] = version
+              filename.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+          PY
+
       - name: Build macOS app
         working-directory: kode
         env:
@@ -150,6 +182,9 @@ jobs:
           done
 
       - name: Collect macOS assets
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           mkdir -p release-assets/macos
@@ -162,6 +197,12 @@ jobs:
               kode/target/release/bundle/macos/kode.app \
               "release-assets/macos/kode-${GITHUB_REF_NAME:-dev}-macos-${RUNNER_ARCH}.app.zip"
           fi
+          version="${RELEASE_VERSION#v}"
+          updater_base="kode_${version}_${RELEASE_ARCH}.app.tar.gz"
+          cp kode/target/release/bundle/macos/kode.app.tar.gz \
+            "release-assets/macos/$updater_base"
+          cp kode/target/release/bundle/macos/kode.app.tar.gz.sig \
+            "release-assets/macos/$updater_base.sig"
 
       - uses: actions/upload-artifact@v6
         with:
@@ -193,6 +234,30 @@ jobs:
         with:
           name: sync-server
           path: release-assets/sync-server
+
+      - name: Generate updater manifest
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_VERSION#v}"
+          base="https://github.com/$REPOSITORY/releases/download/$RELEASE_VERSION"
+          arm_asset="kode_${version}_aarch64.app.tar.gz"
+          intel_asset="kode_${version}_x86_64.app.tar.gz"
+          jq -n \
+            --arg version "$version" \
+            --arg arm_url "$base/$arm_asset" \
+            --rawfile arm_sig "release-assets/macos/$arm_asset.sig" \
+            --arg intel_url "$base/$intel_asset" \
+            --rawfile intel_sig "release-assets/macos/$intel_asset.sig" \
+            '{
+              version: $version,
+              platforms: {
+                "darwin-aarch64": { url: $arm_url, signature: ($arm_sig | rtrimstr("\n")) },
+                "darwin-x86_64": { url: $intel_url, signature: ($intel_sig | rtrimstr("\n")) }
+              }
+            }' > release-assets/macos/latest.json
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
