@@ -40,8 +40,8 @@
     content: string
     binary?: boolean
     truncated?: boolean
-    // 文件预览的渲染方式:markdown=渲染成 HTML;code=语法高亮;plain=纯文本逐行;image=内嵌图片
-    renderKind?: 'markdown' | 'code' | 'plain' | 'image'
+    // 文件预览的渲染方式:HTML 使用隔离 iframe,PDF/图片使用只读内嵌预览
+    renderKind?: 'markdown' | 'code' | 'plain' | 'image' | 'html' | 'pdf'
     // markdown / code 渲染产出的 HTML(已转义,经 marked / hljs 处理)
     html?: string
     // code 高亮识别出的语言(用于角标显示)
@@ -580,12 +580,36 @@
         return
       }
 
+      if (data.kind === 'document' && data.mime === 'application/pdf') {
+        preview = data.truncated && !data.content
+          ? {
+              kind: 'error',
+              title: data.name,
+              subtitle: `${formatBytes(data.size)} · ${compactPath(data.path, 42)}`,
+              content: 'PDF too large to preview (max 25MB). Use Open to view it in the system app.',
+              path: data.path,
+            }
+          : {
+              kind: 'file',
+              title: data.name,
+              subtitle: `${formatBytes(data.size)} · ${compactPath(data.path, 42)}`,
+              content: data.content,
+              renderKind: 'pdf',
+              mime: data.mime,
+              path: data.path,
+            }
+        return
+      }
+
       const isBinary = data.kind === 'binary'
       let renderKind: PreviewState['renderKind'] = 'plain'
       let html: string | undefined
       let lang: string | undefined
       if (!isBinary) {
-        if (isMarkdownFile(data.name)) {
+        if (isHtmlFile(data.name) && !data.truncated) {
+          renderKind = 'html'
+          html = sandboxedHtml(data.content)
+        } else if (isMarkdownFile(data.name)) {
           renderKind = 'markdown'
           html = renderMarkdown(data.content)
         } else {
@@ -618,6 +642,15 @@
         path: entry.path,
       }
     }
+  }
+
+  function isHtmlFile(name: string): boolean {
+    return /\.html?$/i.test(name)
+  }
+
+  function sandboxedHtml(content: string): string {
+    const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline';">`
+    return `${policy}${content}`
   }
 
   async function openSystem(path: string) {
@@ -1010,6 +1043,14 @@
         {:else if preview.kind === 'file' && preview.renderKind === 'image'}
           <div class="preview-image">
             <img src={`data:${preview.mime};base64,${preview.content}`} alt={preview.title} />
+          </div>
+        {:else if preview.kind === 'file' && preview.renderKind === 'html'}
+          <div class="preview-document">
+            <iframe sandbox="" title={`HTML preview: ${preview.title}`} srcdoc={preview.html ?? ''}></iframe>
+          </div>
+        {:else if preview.kind === 'file' && preview.renderKind === 'pdf'}
+          <div class="preview-document">
+            <iframe title={`PDF preview: ${preview.title}`} src={`data:${preview.mime};base64,${preview.content}`}></iframe>
           </div>
         {:else if preview.binary}
           <p class="muted pad">Binary file. Use Open to view it in the system app.</p>
@@ -2043,6 +2084,21 @@
     max-height: 100%;
     object-fit: contain;
     border-radius: 4px;
+  }
+
+  .preview-document {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    padding: 8px;
+    background: var(--bg-pre);
+  }
+  .preview-document iframe {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--bd-muted);
+    border-radius: 4px;
+    background: #fff;
   }
 
   .source-preview {

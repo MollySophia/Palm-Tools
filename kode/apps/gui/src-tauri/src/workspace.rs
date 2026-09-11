@@ -421,6 +421,7 @@ fn entry_to_workspace_entry(entry: std::fs::DirEntry) -> Option<WorkspaceEntry> 
 fn preview_file_sync(raw: &str) -> Result<FilePreview, String> {
     const MAX_BYTES: usize = 220 * 1024;
     const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024; // 10MB
+    const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024; // 25MB
     let path = absolute_path(raw)?;
     if path.is_dir() {
         return Err(format!(
@@ -465,6 +466,31 @@ fn preview_file_sync(raw: &str) -> Result<FilePreview, String> {
             size,
             truncated: false,
             mime,
+        });
+    }
+
+    if ext == "pdf" {
+        if size > MAX_DOCUMENT_BYTES as u64 {
+            return Ok(FilePreview {
+                path: path.to_string_lossy().into_owned(),
+                name,
+                kind: "document".into(),
+                content: String::new(),
+                size,
+                truncated: true,
+                mime: "application/pdf".into(),
+            });
+        }
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        use base64::Engine;
+        return Ok(FilePreview {
+            path: path.to_string_lossy().into_owned(),
+            name,
+            kind: "document".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            size,
+            truncated: false,
+            mime: "application/pdf".into(),
         });
     }
 
@@ -1237,6 +1263,25 @@ mod tests {
         let result = preview_file_sync(path.to_str().unwrap()).unwrap();
         assert_eq!(result.kind, "binary");
         assert_eq!(result.mime, "");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pdf_preview_returns_base64_document() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "kode-test-doc-{}.pdf",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"%PDF-1.7\n%%EOF\n").unwrap();
+        let result = preview_file_sync(path.to_str().unwrap()).unwrap();
+        assert_eq!(result.kind, "document");
+        assert_eq!(result.mime, "application/pdf");
+        assert!(!result.content.is_empty());
+        assert!(!result.truncated);
         let _ = std::fs::remove_file(&path);
     }
 

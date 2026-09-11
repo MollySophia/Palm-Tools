@@ -531,7 +531,7 @@ export interface WorkspaceSnapshot {
 export interface FilePreview {
   path: string
   name: string
-  kind: 'text' | 'binary' | 'image' | string
+  kind: 'text' | 'binary' | 'image' | 'document' | string
   content: string
   size: number
   truncated: boolean

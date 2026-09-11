@@ -30,7 +30,7 @@
     "withGlobalTauri": true,
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self' customprotocol: asset: http://localhost:1437; connect-src ipc: http://ipc.localhost http://localhost:1437 ws://localhost:1437; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' http://localhost:1437; script-src 'self' http://localhost:1437; font-src 'self' data:; frame-src http://127.0.0.1:*"
+      "csp": "default-src 'self' customprotocol: asset: http://localhost:1437; connect-src ipc: http://ipc.localhost http://localhost:1437 ws://localhost:1437; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' http://localhost:1437; script-src 'self' http://localhost:1437; font-src 'self' data:; frame-src 'self' data: http://127.0.0.1:*"
     }
   },
   "bundle": {

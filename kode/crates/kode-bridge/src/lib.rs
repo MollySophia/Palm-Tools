@@ -2124,6 +2124,7 @@ struct WsFilePreview {
     content: String,
     size: u64,
     truncated: bool,
+    mime: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2156,6 +2157,7 @@ struct FsPreviewQuery {
 /// 对齐 `workspace.rs::preview_file_sync`。
 async fn fs_preview(Query(q): Query<FsPreviewQuery>) -> Result<Json<WsFilePreview>, ApiError> {
     const MAX_BYTES: usize = 220 * 1024;
+    const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
     let path = std::path::Path::new(q.path.trim());
     if !path.is_absolute() {
         return Err(ApiError::BadRequest("path must be absolute".into()));
@@ -2169,15 +2171,43 @@ async fn fs_preview(Query(q): Query<FsPreviewQuery>) -> Result<Json<WsFilePrevie
     let metadata = std::fs::metadata(path)
         .map_err(|e| ApiError::NotFound(format!("stat {}: {e}", path.display())))?;
     let size = metadata.len();
-    let bytes = std::fs::read(path)
-        .map_err(|e| ApiError::Internal(format!("read {}: {e}", path.display())))?;
-    let truncated = bytes.len() > MAX_BYTES;
-    let sample = &bytes[..bytes.len().min(MAX_BYTES)];
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
-
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext == "pdf" {
+        if size > MAX_DOCUMENT_BYTES as u64 {
+            return Ok(Json(WsFilePreview {
+                path: path.to_string_lossy().into_owned(),
+                name,
+                kind: "document".into(),
+                content: String::new(),
+                size,
+                truncated: true,
+                mime: "application/pdf".into(),
+            }));
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|e| ApiError::Internal(format!("read {}: {e}", path.display())))?;
+        return Ok(Json(WsFilePreview {
+            path: path.to_string_lossy().into_owned(),
+            name,
+            kind: "document".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            size,
+            truncated: false,
+            mime: "application/pdf".into(),
+        }));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| ApiError::Internal(format!("read {}: {e}", path.display())))?;
+    let truncated = bytes.len() > MAX_BYTES;
+    let sample = &bytes[..bytes.len().min(MAX_BYTES)];
     // 二进制检测:\0 字节(对齐 workspace.rs:189)
     let (kind, content) = if sample.iter().any(|b| *b == 0) {
         ("binary".to_string(), String::new())
@@ -2195,6 +2225,7 @@ async fn fs_preview(Query(q): Query<FsPreviewQuery>) -> Result<Json<WsFilePrevie
         content,
         size,
         truncated,
+        mime: String::new(),
     }))
 }
 
