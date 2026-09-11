@@ -868,7 +868,7 @@ fn persist_agent_event(
     if matches!(event.kind.as_str(), "pty_bytes" | "shell.pty_bytes") {
         return Ok(());
     }
-    let (cloud_id, envelope, inserted) = {
+    let (envelope, publish) = {
         let db = state.inner.db.lock();
         let cloud_id = db
             .query_row(
@@ -886,27 +886,36 @@ fn persist_agent_event(
             kind: event.kind,
             payload: event.payload,
         };
-        let event_key = event_key(device_id, boot_id, local_session_id, &envelope);
-        let inserted = db.execute(
-            "INSERT OR IGNORE INTO events(device_id, cloud_session_id, event_key, ts, kind, envelope_json)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                device_id,
-                cloud_id,
-                event_key,
-                envelope.ts as i64,
-                envelope.kind,
-                serde_json::to_string(&envelope)
-                    .map_err(|_| ApiError::Internal("event serialization failed".into()))?
-            ],
-        )?;
-        if inserted > 0 {
+        // Runtime status is projection state, not conversation history. It can
+        // flip thousands of times while a session remains open, so persisting
+        // every transition eventually crowds messages out of bounded history
+        // windows. Keep the current value in the session DTO and publish it to
+        // live clients, but do not append it to the timeline table.
+        if envelope.kind == "session.status" {
             patch_session_from_event(&db, cloud_id, &envelope)?;
+            (envelope, true)
+        } else {
+            let event_key = event_key(device_id, boot_id, local_session_id, &envelope);
+            let inserted = db.execute(
+                "INSERT OR IGNORE INTO events(device_id, cloud_session_id, event_key, ts, kind, envelope_json)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    device_id,
+                    cloud_id,
+                    event_key,
+                    envelope.ts as i64,
+                    envelope.kind,
+                    serde_json::to_string(&envelope)
+                        .map_err(|_| ApiError::Internal("event serialization failed".into()))?
+                ],
+            )?;
+            if inserted > 0 {
+                patch_session_from_event(&db, cloud_id, &envelope)?;
+            }
+            (envelope, inserted > 0)
         }
-        (cloud_id, envelope, inserted > 0)
     };
-    if inserted {
-        let _ = cloud_id;
+    if publish {
         state.publish(device_id, envelope);
     }
     Ok(())
@@ -1048,18 +1057,31 @@ async fn get_history(
         return Err(ApiError::NotFound(format!("session {session_id}")));
     }
     let from = query.from.unwrap_or(0) as i64;
+    let events = query_history(&db, session_id, from, limit)?;
+    Ok(Json(json!({ "events": events })))
+}
+
+fn query_history(
+    db: &Connection,
+    session_id: i64,
+    from: i64,
+    limit: i64,
+) -> Result<Vec<Value>, ApiError> {
     let sql = if from == 0 {
         // Initial mobile load wants the newest semantic window, but the
-        // response remains chronological for rendering.
+        // response remains chronological for rendering. Runtime status is
+        // projection state and must not consume the bounded timeline window;
+        // the session DTO already carries its latest value.
         "SELECT envelope_json FROM (
            SELECT id, ts, envelope_json FROM events
-           WHERE cloud_session_id=?1 AND kind NOT IN ('pty_bytes','shell.pty_bytes')
+           WHERE cloud_session_id=?1
+             AND kind NOT IN ('pty_bytes','shell.pty_bytes','session.status')
            ORDER BY ts DESC, id DESC LIMIT ?3
          ) ORDER BY ts, id"
     } else {
         "SELECT envelope_json FROM events
          WHERE cloud_session_id=?1 AND ts>=?2
-           AND kind NOT IN ('pty_bytes','shell.pty_bytes')
+           AND kind NOT IN ('pty_bytes','shell.pty_bytes','session.status')
          ORDER BY ts, id LIMIT ?3"
     };
     let mut stmt = db.prepare(sql)?;
@@ -1074,7 +1096,7 @@ async fn get_history(
                 .map_err(|_| ApiError::Internal("invalid stored event".into()))?,
         );
     }
-    Ok(Json(json!({ "events": events })))
+    Ok(events)
 }
 
 #[derive(Deserialize)]
@@ -1602,6 +1624,99 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "exited");
+    }
+
+    #[test]
+    fn runtime_status_does_not_hide_or_expand_conversation_history() {
+        let (_dir, state) = state();
+        state
+            .inner
+            .db
+            .lock()
+            .execute(
+                "INSERT INTO devices(id,installation_id,name,token_hash,created_at,last_seen_at)
+                 VALUES('d','i','desktop','x',1,1)",
+                [],
+            )
+            .unwrap();
+        sync_session_snapshot(
+            &state,
+            "d",
+            "boot",
+            vec![AgentSession {
+                local_id: 7,
+                dto: json!({"id":7,"backend_key":"codex","title":"t","model":"m","status":"idle","tokens":{}}),
+            }],
+        )
+        .unwrap();
+        let cloud_id: i64 = state
+            .inner
+            .db
+            .lock()
+            .query_row("SELECT id FROM sessions", [], |row| row.get(0))
+            .unwrap();
+
+        persist_agent_event(
+            &state,
+            "d",
+            "boot",
+            7,
+            AgentEnvelope {
+                protocol_version: "v1".into(),
+                schema_version: 1,
+                session_id: 7,
+                ts: 2_000,
+                kind: "session.status".into(),
+                payload: json!({"status":"busy"}),
+            },
+        )
+        .unwrap();
+        let db = state.inner.db.lock();
+        let stored_status: String = db
+            .query_row(
+                "SELECT json_extract(dto_json, '$.status') FROM sessions WHERE id=?1",
+                [cloud_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let persisted_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored_status, "busy");
+        assert_eq!(persisted_count, 0);
+
+        let message = json!({
+            "protocol_version":"v1","schema_version":1,"session_id":cloud_id,
+            "ts":1,"type":"message","payload":{"role":"user","text":"still visible"}
+        });
+        db.execute(
+            "INSERT INTO events(device_id,cloud_session_id,event_key,ts,kind,envelope_json)
+             VALUES('d',?1,'message',1,'message',?2)",
+            params![cloud_id, message.to_string()],
+        )
+        .unwrap();
+        for index in 0..1_001 {
+            let envelope = json!({
+                "protocol_version":"v1","schema_version":1,"session_id":cloud_id,
+                "ts":index + 2,"type":"session.status","payload":{"status":"idle"}
+            });
+            db.execute(
+                "INSERT INTO events(device_id,cloud_session_id,event_key,ts,kind,envelope_json)
+                 VALUES('d',?1,?2,?3,'session.status',?4)",
+                params![
+                    cloud_id,
+                    format!("status-{index}"),
+                    index + 2,
+                    envelope.to_string()
+                ],
+            )
+            .unwrap();
+        }
+
+        let history = query_history(&db, cloud_id, 0, 1_000).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["type"], "message");
+        assert_eq!(history[0]["payload"]["text"], "still visible");
     }
 
     #[test]
