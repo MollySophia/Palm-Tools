@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
 
 import appScript from '../src/server/public/app.js'
 import indexHtml from '../src/server/public/index.html'
@@ -65,10 +66,13 @@ describe('SpecOps console assets (Vite build output)', () => {
       'app.js': statSync(`${publicDir}/app.js`).size,
       'styles.css': statSync(`${publicDir}/styles.css`).size,
     }
-    // Sanity bounds (the legacy hand-written files were far larger).
+    // The single-file bundle also embeds the backend PNG icons as base64.
+    // Baseline: 515,333 raw bytes / 245,697 gzip bytes. Keep explicit budgets
+    // for both the embedded payload and its compressed size as features grow.
     expect(stats['index.html']).toBeLessThan(2 * 1024)
     expect(stats['app.js']).toBeGreaterThan(10 * 1024)
-    expect(stats['app.js']).toBeLessThan(500 * 1024)
+    expect(stats['app.js']).toBeLessThan(550 * 1024)
+    expect(gzipSync(readFileSync(`${publicDir}/app.js`)).length).toBeLessThan(270 * 1024)
     expect(stats['styles.css']).toBeGreaterThan(5 * 1024)
     expect(stats['styles.css']).toBeLessThan(100 * 1024)
   })

@@ -195,7 +195,7 @@ jobs:
             echo "::error::Configure all three notarization secrets: APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID."
             exit 1
           fi
-          ./run.sh app
+          bash deploy/build-macos-ci.sh
 
       - name: Verify complete app signature
         run: |

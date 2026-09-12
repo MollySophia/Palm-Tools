@@ -32,7 +32,7 @@ Apple 公证的三个 Secret 必须一起配置。证书从钥匙串「我的证
 
 当前本机已生成新的 `.tauri/kode-updater.key` 和 `.pub`，应用配置已同步新公钥。父仓库 `.gitignore` 的 `kode/.tauri/` 已忽略整个密钥目录，公钥通过 Tauri 配置入库即可，无需提交密钥文件。使用旧公钥的安装包需要手动安装一次新版本。
 
-最近一次检查的仓库级 `TAURI_*` Secret 列表仍为空；组织级授权是否提供同名 Secret 需管理员确认。生成本地密钥不会自动配置 GitHub。可以在设置页面填写，或从仓库根目录运行 `gh secret set TAURI_SIGNING_PRIVATE_KEY --repo TencentYoutuResearch/Palm-Tools < .tauri/kode-updater.key`；有密码时再运行 `gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo TencentYoutuResearch/Palm-Tools` 并按提示输入。
+生成本地密钥不会自动配置 GitHub。可以在设置页面填写，或从 kode 目录运行 `gh secret set TAURI_SIGNING_PRIVATE_KEY --repo TencentYoutuResearch/Palm-Tools < .tauri/kode-updater.key`；有密码时再运行 `gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo TencentYoutuResearch/Palm-Tools` 并按提示输入。
 
 ## 发布
 
@@ -56,6 +56,8 @@ Apple 公证的三个 Secret 必须一起配置。证书从钥匙串「我的证
 - 历史上没有集成 updater 的应用必须先手动安装带更新功能的版本。
 
 ## 本地检查
+
+CI 通过 `deploy/build-macos-ci.sh` 开启 Tauri 详细日志，显示 `bundle_dmg.sh` 内部的磁盘镜像错误。仅当该脚本失败时重试一次，复用编译缓存；编译、签名错误或第二次失败仍阻断发布。未配置 Apple 公证的 warning 本身不是 DMG 失败原因。若重试后仍失败，应根据详细日志定位，不能仅凭顶层 `failed to run bundle_dmg.sh` 判定原因。
 
 本地交互终端未设置密码环境变量时，脚本会在编译前隐藏输入地询问私钥密码（无密码直接回车）。非交互构建应预先设置密码环境变量。签名预检失败会立即停止，不再等待完整编译后才发现密码错误。
 
