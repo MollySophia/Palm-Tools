@@ -3,7 +3,7 @@
    * CLI/model token 灵动岛。数据来自 Rust 对本地历史 JSONL 的聚合，和 tab 生命周期无关。
    */
   import { onMount, onDestroy } from 'svelte'
-  import { getCurrentWindow } from '@tauri-apps/api/window'
+  import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
   import type { UnlistenFn } from '@tauri-apps/api/event'
   import Icon from './Icon.svelte'
   import BackendIcon from './BackendIcon.svelte'
@@ -19,6 +19,11 @@
   const panelOpenDurationMs = 360
   const panelCloseDurationMs = 300
 
+  let startupPreview = $state(true)
+  let startupPreviewTimer: number | null = null
+  let revealed = $state(false)
+  let hovered = false
+  let opening = false
   let open = $state(false)
   let panelMounted = $state(false)
   let panelClosing = $state(false)
@@ -33,13 +38,20 @@
   let layoutUnlisten: UnlistenFn | null = null
   let nativeHoverUnlisten: UnlistenFn | null = null
   let resizeSequence = 0
+  let previewHoverCheckPending = false
+  let previewHideTimer: number | null = null
   let hoverTimer: number | null = null
   let panelSettleTimer: number | null = null
   let panelCloseTimer: number | null = null
   let panelFitFrame: number | null = null
+  let panelHitWidth = $state(654)
+  let panelHitHeight = $state(708)
   let panelElement: HTMLElement | null = null
   let panelSettled = false
   let monitorLayout: ModelMonitorLayout = $state({ isNotched: false, notchWidth: 185, notchHeight: 32, menuBarHeight: 24 })
+
+  // Each overlay owns its display layout and startup clock independently.
+  const compactVisible = $derived(startupPreview || monitorLayout.isNotched || revealed)
 
   let islandRoot = $state<HTMLDivElement>()
   const maxTokens = $derived(Math.max(1, ...((snapshot?.rows ?? []).map((row) => row.total_tokens))))
@@ -67,6 +79,15 @@
     if (panelElement) updatePanelMorphMetrics(panelElement)
   })
 
+  $effect(() => {
+    const notchWidth = Math.max(96, monitorLayout.notchWidth)
+    const width = panelMounted ? panelHitWidth : compactVisible ? notchWidth + 180 : notchWidth
+    const height = panelMounted ? panelHitHeight : compactVisible ? Math.max(24, monitorLayout.notchHeight) : 4
+    void modelMonitorIpc.setHitSize(width, height).catch(() => {
+      // Outside Tauri the native pointer tracker is unavailable.
+    })
+  })
+
   async function refresh(nextPeriod = period) {
     const sequence = ++refreshSequence
     loading = true
@@ -89,9 +110,16 @@
   }
 
   async function setOpen(next: boolean) {
-    if (next === open) return
+    if (next && panelClosing) return
+    if (next ? open || opening : !open && !opening) return
     const sequence = ++resizeSequence
     if (next) {
+      if (previewHideTimer != null) {
+        window.clearTimeout(previewHideTimer)
+        previewHideTimer = null
+      }
+      opening = true
+      revealed = true
       if (panelCloseTimer != null) {
         window.clearTimeout(panelCloseTimer)
         panelCloseTimer = null
@@ -99,7 +127,10 @@
       try {
         await modelMonitorIpc.setExpanded(true)
       } catch (cause) {
-        error = String(cause)
+        if (sequence === resizeSequence) {
+          opening = false
+          error = String(cause)
+        }
         return
       }
       if (sequence !== resizeSequence) return
@@ -108,6 +139,7 @@
       // make the first animation frame absorb surface allocation and layout together.
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
       if (sequence !== resizeSequence) return
+      opening = false
       panelSettled = false
       panelClosing = false
       panelMounted = true
@@ -116,6 +148,14 @@
       // reduced-motion 下没有 animationend；fallback 同时避免未来 CSS 动画改名后
       // 原生窗口一直停留在 720px 的 staging 高度。
       panelSettleTimer = window.setTimeout(settlePanelWindow, panelOpenDurationMs + 40)
+      return
+    }
+    opening = false
+    clearHoverTimer()
+    revealed = true
+    if (!panelMounted) {
+      void modelMonitorIpc.setExpanded(false)
+      retainPreviewBeforeHiding()
       return
     }
     panelSettled = false
@@ -141,6 +181,7 @@
     panelMounted = false
     panelClosing = false
     void modelMonitorIpc.setExpanded(false)
+    retainPreviewBeforeHiding()
   }
 
   function schedulePanelFit() {
@@ -192,6 +233,8 @@
   function updatePanelMorphMetrics(node: HTMLElement) {
     const fullWidth = Math.max(1, node.offsetWidth)
     const fullHeight = Math.max(1, node.offsetHeight)
+    panelHitWidth = fullWidth
+    panelHitHeight = fullHeight
     const closedWidth = Math.min(fullWidth, Math.max(96, monitorLayout.notchWidth) + 180)
     const closedHeight = Math.min(fullHeight, Math.max(24, monitorLayout.notchHeight))
     node.style.setProperty('--panel-closed-scale-x', String(closedWidth / fullWidth))
@@ -210,39 +253,90 @@
     hoverTimer = null
   }
 
+  function retainPreviewBeforeHiding() {
+    if (previewHideTimer != null) return
+    revealed = true
+    // Start the hide delay only after the fold reaches the compact notch.
+    previewHideTimer = window.setTimeout(() => {
+      previewHideTimer = null
+      revealed = false
+    }, 1000)
+    void resumePreviewIfPointed()
+  }
+
+  async function resumePreviewIfPointed() {
+    if (previewHideTimer == null || panelClosing || previewHoverCheckPending) return
+    const timer = previewHideTimer
+    previewHoverCheckPending = true
+    try {
+      const currentWindow = getCurrentWindow()
+      const [position, scale, cursor] = await Promise.all([
+        currentWindow.outerPosition(), currentWindow.scaleFactor(), cursorPosition(),
+      ])
+      if (previewHideTimer !== timer || panelClosing) return
+      // A native hover may still describe the old expanded window. Verify the
+      // actual compact trigger, including Retina scaling, before reopening.
+      const rect = islandRoot?.querySelector('.island-trigger')?.getBoundingClientRect()
+      const x = (cursor.x - position.x) / scale
+      const y = (cursor.y - position.y) / scale
+      if (rect && x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom) {
+        hovered = true
+        await setOpen(true)
+      }
+    } catch {
+      // If native pointer lookup fails, retain the normal timed hide.
+    } finally {
+      previewHoverCheckPending = false
+    }
+  }
+
   function onIslandEnter() {
-    clearHoverTimer()
-    if (open) return
-    // 收缩途中重新进入时立即反向展开，先递增 resizeSequence 取消待执行的
-    // native window shrink，避免窗口先缩再放造成一次闪烁。
-    if (panelClosing) {
-      void setOpen(true)
+    // During the retained preview, even a heartbeat can confirm that the
+    // pointer stayed on the notch throughout the fold.
+    if (previewHideTimer != null) {
+      void resumePreviewIfPointed()
       return
     }
+    // Native hover heartbeats repeat every 400ms; they must not restart the dwell.
+    if (hovered) return
+    hovered = true
+    if (panelClosing) return
+    revealed = true
+    clearHoverTimer()
+    if (open || opening) return
     hoverTimer = window.setTimeout(() => {
       hoverTimer = null
-      void setOpen(true)
-    }, 160)
+      if (hovered) void setOpen(true)
+    }, 1000)
   }
 
   function onIslandLeave() {
+    hovered = false
+    if (panelClosing || previewHideTimer != null) return
     clearHoverTimer()
-    if (!open) return
     hoverTimer = window.setTimeout(() => {
       hoverTimer = null
-      void setOpen(false)
+      if (open || opening) void setOpen(false)
+      else revealed = false
     }, 220)
+  }
+
+  function dismiss() {
+    clearHoverTimer()
+    if (panelClosing || previewHideTimer != null) return
+    if (open || opening) void setOpen(false)
+    else revealed = false
   }
 
   function onWindowClick(event: MouseEvent) {
     if (islandRoot?.contains(event.target as Node)) return
-    if (open) void setOpen(false)
+    dismiss()
   }
 
   function onWindowKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && open) {
+    if (event.key === 'Escape') {
       event.stopPropagation()
-      void setOpen(false)
+      dismiss()
     }
   }
 
@@ -275,6 +369,10 @@
   }
 
   onMount(() => {
+    startupPreviewTimer = window.setTimeout(() => {
+      startupPreviewTimer = null
+      startupPreview = false
+    }, 10_000)
     document.documentElement.dataset.window = 'model-monitor'
     // 刘海是硬件黑色，不跟随 app / system 的 light appearance。
     document.documentElement.dataset.theme = 'dark'
@@ -292,13 +390,15 @@
       if (period === 'today') void refresh('today')
     }, 60_000)
     void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (!focused && open) void setOpen(false)
+      if (!focused) dismiss()
     }).then((unlisten) => { focusUnlisten = unlisten })
   })
 
   onDestroy(() => {
+    if (startupPreviewTimer != null) window.clearTimeout(startupPreviewTimer)
     if (refreshTimer != null) window.clearInterval(refreshTimer)
     clearHoverTimer()
+    if (previewHideTimer != null) window.clearTimeout(previewHideTimer)
     if (panelSettleTimer != null) window.clearTimeout(panelSettleTimer)
     if (panelCloseTimer != null) window.clearTimeout(panelCloseTimer)
     if (panelFitFrame != null) window.cancelAnimationFrame(panelFitFrame)
@@ -315,6 +415,7 @@
 <div
   class="model-island"
   class:notched={monitorLayout.isNotched}
+  class:revealed={compactVisible || panelMounted}
   class:expanded-surface={panelMounted}
   style={`--notch-width:${Math.max(96, monitorLayout.notchWidth)}px;--notch-height:${Math.max(24, monitorLayout.notchHeight)}px;--menu-bar-height:${Math.max(24, monitorLayout.menuBarHeight)}px;--closed-width:${Math.max(96, monitorLayout.notchWidth) + 180}px`}
   bind:this={islandRoot}
@@ -328,6 +429,7 @@
     aria-expanded={open}
     title="Model token monitor"
     onclick={toggle}
+    onfocus={() => { revealed = true }}
   >
     <span class="trigger-side trigger-left">
       <span><strong>KODE</strong><small>MODEL TRAFFIC</small></span>
@@ -461,15 +563,18 @@
     --fg-primary: #f5f5f7; --fg-secondary: #c7c7cc; --fg-tertiary: #8e8e93;
     --bd-muted: #242426; --bd-default: #303033; --bd-strong: #3a3a3c;
     position: relative; width: 100%; height: 34px; padding-top: 0; margin: 0 auto; box-sizing: border-box;
-    -webkit-app-region: no-drag; pointer-events: auto; color: var(--fg-primary);
+    -webkit-app-region: no-drag; pointer-events: none; color: var(--fg-primary);
   }
   .model-island.expanded-surface { height: 100%; }
   .island-trigger {
+    pointer-events: auto;
     width: var(--closed-width); height: var(--notch-height); grid-template-columns: 90px var(--notch-width) 90px;
     position: relative; z-index: 3; display: grid; align-items: center; margin: 0 auto; padding: 0;
     border: 0; border-radius: 0 0 14px 14px; background: #000; color: #f5f5f7; box-shadow: none; cursor: pointer;
-    transition: background var(--t-fast), opacity var(--t-fast);
+    opacity: 0; transform: translateY(-100%);
+    transition: background var(--t-fast), opacity var(--t-fast), transform var(--t-normal, 180ms);
   }
+  .model-island.revealed .island-trigger { opacity: 1; transform: translateY(0); }
   .island-trigger:hover { background: #000; }
   .island-trigger:active { opacity: .88; }
   .island-trigger:focus-visible, button:focus-visible { outline: 2px solid var(--bd-focus); outline-offset: 2px; }
@@ -482,6 +587,7 @@
   .trigger-right strong { color: var(--st-tokens); font-size: 10px; }
   .notch-gap { width: var(--notch-width); height: 100%; }
   .usage-panel {
+    pointer-events: auto;
     --panel-closed-scale-x: .6; --panel-closed-scale-y: .06;
     position: absolute; top: 0; left: 50%; width: 620px; transform: translateX(-50%);
     padding: calc(var(--notch-height) + 14px) 16px 16px; border: 0 solid var(--bd-strong); border-width: 0 1px 1px; border-radius: 0 0 18px 18px;

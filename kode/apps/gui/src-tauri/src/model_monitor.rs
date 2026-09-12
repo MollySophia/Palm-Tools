@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, LazyLock, Mutex,
@@ -24,8 +24,10 @@ const MODEL_MONITOR_NATIVE_HOVER_EVENT: &str = "model-monitor-native-hover-chang
 static EXPANDED_MODEL_MONITORS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 const COLLAPSED_WIDTH: f64 = 440.0;
-const COLLAPSED_HOVER_WIDTH: f64 = 400.0;
-const COLLAPSED_HOVER_HEIGHT: f64 = 36.0;
+const COLLAPSED_HOVER_WIDTH: f64 = 185.0;
+const COLLAPSED_HOVER_HEIGHT: f64 = 4.0;
+static MODEL_MONITOR_HIT_SIZES: LazyLock<Mutex<HashMap<String, (f64, f64)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 const SIMULATED_NOTCH_WIDTH: f64 = 185.0;
 const EXPANDED_WIDTH: f64 = 660.0;
 // 展开动画先使用足够大的画布，稳定后由前端按真实内容高度调用
@@ -73,6 +75,9 @@ fn create_model_monitor_for_display(
     monitor: &tauri::Monitor,
 ) -> Result<WebviewWindow, String> {
     let label = model_monitor_label(monitor);
+    if let Ok(mut sizes) = MODEL_MONITOR_HIT_SIZES.lock() {
+        sizes.remove(&label);
+    }
     let window = WebviewWindowBuilder::new(
         app,
         &label,
@@ -181,6 +186,29 @@ fn available_model_monitor_labels(app: &tauri::AppHandle) -> Result<HashSet<Stri
         .iter()
         .map(model_monitor_label)
         .collect())
+}
+
+/// The frontend reports visible geometry only on state/layout changes, never per pointer move.
+#[tauri::command]
+pub fn model_monitor_set_hit_size(
+    window: WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if !is_model_monitor_window(&window) {
+        return Err("model monitor hit size is only available to its own window".into());
+    }
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("model monitor hit size must be finite and positive".into());
+    }
+    MODEL_MONITOR_HIT_SIZES
+        .lock()
+        .map_err(|_| "model monitor hit size lock failed")?
+        .insert(
+            window.label().to_string(),
+            (width.min(EXPANDED_WIDTH), height.min(EXPANDED_HEIGHT)),
+        );
+    Ok(())
 }
 
 #[tauri::command]
@@ -602,7 +630,11 @@ fn start_model_monitor_hover_tracking(window: &WebviewWindow) {
             {
                 break;
             }
-            let expanded = is_model_monitor_expanded(&window);
+            let hit_size = MODEL_MONITOR_HIT_SIZES
+                .lock()
+                .ok()
+                .and_then(|sizes| sizes.get(window.label()).copied())
+                .unwrap_or((COLLAPSED_HOVER_WIDTH, COLLAPSED_HOVER_HEIGHT));
             let next = window
                 .cursor_position()
                 .ok()
@@ -617,7 +649,7 @@ fn start_model_monitor_hover_tracking(window: &WebviewWindow) {
                         size.width,
                         size.height,
                         window.scale_factor().unwrap_or(1.0),
-                        expanded,
+                        hit_size,
                     )
                 });
 
@@ -652,18 +684,11 @@ fn point_is_inside_monitor_hit_region(
     width: u32,
     height: u32,
     scale_factor: f64,
-    expanded: bool,
+    hit_size: (f64, f64),
 ) -> bool {
-    let (hit_x, hit_width, hit_height) = if expanded {
-        (window_x as f64, width as f64, height as f64)
-    } else {
-        let hit_width = (COLLAPSED_HOVER_WIDTH * scale_factor).min(width as f64);
-        (
-            window_x as f64 + (width as f64 - hit_width) / 2.0,
-            hit_width,
-            (COLLAPSED_HOVER_HEIGHT * scale_factor).min(height as f64),
-        )
-    };
+    let hit_width = (hit_size.0 * scale_factor).min(width as f64);
+    let hit_height = (hit_size.1 * scale_factor).min(height as f64);
+    let hit_x = window_x as f64 + (width as f64 - hit_width) / 2.0;
     cursor_x >= hit_x
         && cursor_x < hit_x + hit_width
         && cursor_y >= window_y as f64
@@ -796,23 +821,113 @@ mod tests {
     #[test]
     fn native_hover_hit_test_uses_full_expanded_window() {
         assert!(point_is_inside_monitor_hit_region(
-            150.0, 20.0, 100, 10, 200, 40, 1.0, true,
+            150.0,
+            20.0,
+            100,
+            10,
+            200,
+            40,
+            1.0,
+            (200.0, 40.0),
         ));
         assert!(!point_is_inside_monitor_hit_region(
-            300.0, 20.0, 100, 10, 200, 40, 1.0, true,
+            300.0,
+            20.0,
+            100,
+            10,
+            200,
+            40,
+            1.0,
+            (200.0, 40.0),
         ));
     }
 
     #[test]
     fn collapsed_native_hover_only_uses_centered_top_region() {
         assert!(point_is_inside_monitor_hit_region(
-            330.0, 20.0, 100, 10, 460, 600, 1.0, false,
+            330.0,
+            12.0,
+            100,
+            10,
+            460,
+            600,
+            1.0,
+            (185.0, 4.0),
         ));
         assert!(!point_is_inside_monitor_hit_region(
-            110.0, 20.0, 100, 10, 460, 600, 1.0, false,
+            110.0,
+            20.0,
+            100,
+            10,
+            460,
+            600,
+            1.0,
+            (185.0, 4.0),
         ));
         assert!(!point_is_inside_monitor_hit_region(
-            330.0, 60.0, 100, 10, 460, 600, 1.0, false,
+            330.0,
+            60.0,
+            100,
+            10,
+            460,
+            600,
+            1.0,
+            (185.0, 4.0),
+        ));
+    }
+
+    #[test]
+    fn hidden_hit_region_excludes_old_padding_and_scales_on_retina() {
+        assert!(point_is_inside_monitor_hit_region(
+            660.0,
+            23.0,
+            200,
+            20,
+            920,
+            1200,
+            2.0,
+            (185.0, 4.0)
+        ));
+        assert!(!point_is_inside_monitor_hit_region(
+            460.0,
+            23.0,
+            200,
+            20,
+            920,
+            1200,
+            2.0,
+            (185.0, 4.0)
+        ));
+        assert!(!point_is_inside_monitor_hit_region(
+            660.0,
+            28.0,
+            200,
+            20,
+            920,
+            1200,
+            2.0,
+            (185.0, 4.0)
+        ));
+        // The visible compact island accepts its side labels, but not blank space below it.
+        assert!(point_is_inside_monitor_hit_region(
+            400.0,
+            60.0,
+            200,
+            20,
+            920,
+            1200,
+            2.0,
+            (365.0, 32.0)
+        ));
+        assert!(!point_is_inside_monitor_hit_region(
+            660.0,
+            84.0,
+            200,
+            20,
+            920,
+            1200,
+            2.0,
+            (365.0, 32.0)
         ));
     }
 

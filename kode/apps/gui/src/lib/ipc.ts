@@ -200,6 +200,8 @@ export interface ModelMonitorLayout {
 }
 
 export const modelMonitorIpc = {
+  setHitSize: (width: number, height: number) =>
+    invoke<void>('model_monitor_set_hit_size', { width, height }),
   setExpanded: (expanded: boolean) =>
     invoke<void>('model_monitor_set_expanded', { expanded }),
   fitHeight: (height: number) =>
