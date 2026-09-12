@@ -311,12 +311,14 @@ export class TerminalAnsiThemeAdapter {
   private stringControl: StringControl | null = null
   private stringEsc = false
   private reverseSurfaceActive = false
+  private utf8Remaining = 0
 
   reset(): void {
     this.pending = new Uint8Array(0)
     this.stringControl = null
     this.stringEsc = false
     this.reverseSurfaceActive = false
+    this.utf8Remaining = 0
   }
 
   flush(): Uint8Array {
@@ -340,6 +342,25 @@ export class TerminalAnsiThemeAdapter {
 
     while (index < data.length) {
       const byte = data[index]
+
+      // PTY output is UTF-8. Continuations overlap C1 controls (0x80–0x9f):
+      // e.g. ▘ ends in 0x98 (SOS). Treating it as a string opener disables
+      // background adaptation until ST, producing mixed surfaces on redraw.
+      // Track across chunks without decoding/copying the byte stream.
+      if (this.utf8Remaining > 0) {
+        if (byte >= 0x80 && byte <= 0xbf) {
+          this.utf8Remaining--
+          index++
+          continue
+        }
+        this.utf8Remaining = 0
+      }
+      if (byte >= 0xc2 && byte <= 0xf4) {
+        this.utf8Remaining = byte <= 0xdf ? 1 : byte <= 0xef ? 2 : 3
+        this.stringEsc = false
+        index++
+        continue
+      }
 
       if (this.stringControl != null) {
         if (this.stringEsc) {

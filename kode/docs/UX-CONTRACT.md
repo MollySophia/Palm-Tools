@@ -44,10 +44,18 @@ Billing, payment, regulated copy, and end-user permission policy are not part of
 | Form | Cloud relay form in `PairingDialog.svelte`; authoritative validation in `cloud_deploy.rs` / `cloud_sync.rs` | Cloud sync protocol + this contract | SSH deployment / existing service | Svelte check + Rust tests + WebView |
 | Select/Listbox | Native `<select>` for the small saved-backend switcher | This contract | platform-owned popup accepted | keyboard + WebView open state |
 | Terminal Theme | `terminal_settings.ts` + `terminal_ansi_theme.ts` plus spawn-time `TERM_THEME` / `COLORFGBG`; consumed by `Terminal.svelte`, `ShellTerminalPanel.svelte`, and the PTY spawn layer | `docs/DESIGN.md` + this contract | dark / light / follow app | foreground-preservation/background-mapping unit tests + env regression + Svelte check + dark/light WebView |
-| Application Update | Tauri updater plugin + `UpdateButton.svelte`; GitHub Release `latest.json` is the signed release source | This contract + GitHub release workflow | macOS aarch64 / x86_64 | Svelte check + Rust tests + signed release smoke test |
+| Application Update | `app_updates.rs` selects GitHub channels; `app_updates.ts` owns shared state for `UpdateSettings.svelte` and `UpdateButton.svelte`; Tauri verifies signed packages | This contract + GitHub release workflow + `RELEASE-SIGNING.md` | macOS aarch64 / x86_64 | Svelte check + channel/race/retry tests + signed release smoke test |
 | Session Status | `kode-core::session::BusyHeuristic` + `Session`; consumed through `session.status` by `sessions.ts` | This contract | starting / busy / idle / exited | kode-core unit tests + GUI session cancel flow |
 
 ## Component behavior
+
+Flutter's session list, conversation, device manager and pairing routes share
+`GlassScaffold` / `GlassSurface` from `apps/mobile/lib/src/ui/glass.dart`. Glass is
+a visual material only: route behavior, device binding, semantic status, composer
+keyboard avoidance and message delivery remain unchanged. Blur is limited to
+clipped navigation/composer regions; repeated list surfaces do not blur. High
+contrast and disabled animations select an opaque material. Dark/light, narrow
+layout and keyboard regression coverage lives in Flutter widget tests.
 
 | Component | Default | Hover | Focus | Active | Disabled | Busy | Error |
 |---|---|---|---|---|---|---|---|
@@ -95,9 +103,17 @@ Billing, payment, regulated copy, and end-user permission policy are not part of
 | Send session message | Send from session composer | Optimistic user bubble appears immediately as `SENT`; input clears, keyboard dismisses, and request submits while working | Same session | Matching canonical CLI user message morphs that bubble to `PROCESSED` | Failed/expired request changes the same bubble to `NOT SENT` with Retry/Discard | Transcript tail; composer remains dismissed | cloud sync protocol §Mobile compatibility API |
 | Dictate session message | Tap microphone for default Mandarin; long-press it to switch Mandarin/English; tap again to stop | Microphone marker and inline rail name the selected locale, which is locked while listening; partial transcript remains editable | Same composer | Final transcript remains editable; explicit Send is still required | Missing requested locale or permission/recognition error stays inline and can be dismissed/retried | Microphone control | speech_to_text platform contract |
 | Revoke mobile binding | Unpair | Pessimistic server revoke, then local credential removal | Pair screen | Binding removed | Local credential is removed even if server is unreachable; server-side revocation failure is logged for recovery | Pair screen | cloud sync protocol §Credentials and pairing |
-| Update kode | An icon-only download button in the title bar, shown only after a newer signed GitHub Release is found; tooltip and accessible name include the target version | Stable button geometry with border progress; duplicate activation blocked | Relaunched updated app | Shared success toast before relaunch | Error toast keeps the update button available for explicit retry | Update button | Tauri updater contract |
+| Update kode | Settings → Software updates or the title-bar update button; target version named | Shared progress; duplicate installs and channel changes blocked during installation | Installed state with explicit Restart action; current sessions continue until restart | Inline installed status, plus toast for title-bar action | Inline error in settings or toast for title-bar action; explicit retry | Invoking action | Tauri updater contract |
 
 ## Navigation and responsive behavior
+
+- Mobile detail reconstruction restores unprocessed outbound bubbles from the session queue before history loading. Existing bubbles remain visible during history fetch; canonical CLI messages reconcile them in place. This survives route disposal/re-entry within the current device session, but the in-memory queue is not persisted across app process termination.
+
+- Mobile composer action uses the same live session status as the header. Busy + empty/whitespace draft displays a disabled running spinner; any nonblank draft takes priority and enables Send even while the agent works. Clearing/sending restores the spinner if still busy; idle + empty displays a disabled arrow. Button geometry stays fixed and reduced-motion replaces continuous rotation with a static progress arc.
+
+- Codex idle composer animation is decorative output, not agent work. Its backend profile disables PTY-byte-based busy/unread transitions; local submission and semantic `task_started` hold busy, while completion/abort/cancel release it. Raw bytes still reach both terminal parsers unchanged. Other backend activity policies remain unchanged.
+
+- Update testing exception: an explicit session-only “Debug: ignore local version” switch allows reinstall and downgrade to the current channel's highest published version. It defaults off after launch, invalidates in-flight checks when changed, and is locked during installation. It never bypasses platform, manifest/tag or signature validation, and never triggers installation without an explicit install action.
 
 - Route document title policy: The Tauri window uses the product title; modal drawers do not create routes.
 - Route error / 403 page behavior: Not applicable to this local desktop drawer; source availability is reported inline.
@@ -136,6 +152,7 @@ Billing, payment, regulated copy, and end-user permission policy are not part of
 - Native backend inventory is a separate read-only control-plane view. Codex, Claude, and CodeBuddy are queried through bounded native CLI list commands; Cursor local-development plugins are inspected only from its supported local plugin directory while marketplace-only CLI support remains `partial`. A scan never installs, removes, enables, disables, authenticates, or writes backend caches. Backend identity is provider-qualified, and one backend failing must not suppress another backend's inventory.
 - Idempotency and duplicate-submit policy: One `busy` owner blocks repeated single and batch review.
 - Application update checks are read-only and silent when offline. Download and installation begin only after an explicit click, accept only artifacts signed by the embedded updater public key, expose byte progress when available, and retry only after another explicit click.
+- Software updates defaults to stable releases. An opt-in Beta switch includes prereleases and persists locally; channel changes immediately invalidate older checks and close their resources. Select the highest published SemVer, never downgrade, and distinguish missing updater assets from no newer version. Check on startup, every four hours, on network recovery, or explicitly in settings. Installation never relaunches automatically; the separate restart action states that it interrupts sessions.
 - Offline/read-stale/write behavior: Each local/remote source fails independently; healthy sources remain usable.
 - Retry/backoff/timeout behavior: A later pending event or reopen triggers refresh; automatic duplicate mutation is forbidden.
 - Long-running progress: Batch processing exposes true completed/total values.

@@ -19,7 +19,7 @@ final savedEndpointsProvider = StateProvider<List<Endpoint>>((ref) => const []);
 /// 启动时一次性 bootstrap:
 ///   1. 优先用 secure storage 里曾经的 endpoint;但**先 probe 一遍** —— 如果不通
 ///      (端口变了 / token 失效),不要直接拿空白带进 /sessions 屏挂掉
-///   2. 已存不通 → 清除失效绑定,UI 走 /pair 重新扫码
+///   2. 已存不通 → 保留绑定，允许进入设备管理切换或重试
 final endpointBootstrapProvider = FutureProvider<Endpoint?>((ref) async {
   final storage = ref.read(endpointStorageProvider);
 
@@ -226,6 +226,10 @@ class SessionsNotifier extends AsyncNotifier<List<SessionDto>> {
   @override
   Future<List<SessionDto>> build() async {
     final api = ref.watch(apiClientProvider);
+    // A refresh from the previous desktop can finish after switching devices.
+    // Invalidate it on every rebuild/disposal, including switching to no device.
+    _refreshGeneration++;
+    ref.onDispose(() => _refreshGeneration++);
     if (api == null) return const [];
 
     // WS 事件来了时增量更新本地缓存

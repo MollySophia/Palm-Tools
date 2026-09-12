@@ -1,83 +1,29 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
-  import { getVersion } from '@tauri-apps/api/app'
-  import { relaunch } from '@tauri-apps/plugin-process'
-  import { check, type Update } from '@tauri-apps/plugin-updater'
+  import { onMount } from 'svelte'
   import { currentLocale, t } from './i18n'
+  import { updates, startUpdateChecks, installAppUpdate, restartAfterUpdate } from './app_updates'
   import { pushToast } from './toast'
 
-  let update: Update | null = $state(null)
-  let currentVersion = $state('')
-  let phase: 'idle' | 'downloading' | 'installing' = $state('idle')
-  let downloaded = $state(0)
-  let contentLength: number | null = $state(null)
-  let disposed = false
-
+  let update = $derived($updates.update)
+  let phase = $derived($updates.phase)
+  let currentVersion = $derived($updates.currentVersion)
   let tr = $derived.by(() => {
     void $currentLocale
     return (key: string, params?: Record<string, string | number>) => t(key, params)
   })
-
   let progress = $derived(
-    contentLength && contentLength > 0
-      ? Math.min(100, Math.round((downloaded / contentLength) * 100))
+    $updates.contentLength && $updates.contentLength > 0
+      ? Math.min(100, Math.round($updates.downloaded / $updates.contentLength * 100))
       : null
   )
-
-  onMount(async () => {
-    try {
-      currentVersion = await getVersion()
-      const available = await check({ timeout: 15_000 })
-      if (disposed) {
-        await available?.close()
-        return
-      }
-      update = available
-    } catch (error) {
-      // 启动时的后台检查不应因离线或 GitHub 不可达打扰用户。
-      console.info('update check unavailable', error)
-    }
-  })
-
-  onDestroy(() => {
-    disposed = true
-    if (phase === 'idle') void update?.close()
-  })
-
+  onMount(startUpdateChecks)
   async function installUpdate() {
-    if (!update || phase !== 'idle') return
-
-    phase = 'downloading'
-    downloaded = 0
-    contentLength = null
-
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          contentLength = event.data.contentLength ?? null
-        } else if (event.event === 'Progress') {
-          downloaded += event.data.chunkLength
-        } else if (event.event === 'Finished') {
-          phase = 'installing'
-        }
-      }, { timeout: 120_000 })
-
-      pushToast({
-        severity: 'success',
-        title: tr('update.installed'),
-        detail: tr('update.restarting'),
-        durationMs: 8_000,
-      })
-      await relaunch()
-    } catch (error) {
-      phase = 'idle'
-      pushToast({
-        severity: 'error',
-        title: tr('update.failed'),
-        detail: String(error),
-        durationMs: 8_000,
-      })
+    if (phase === 'installed') await restartAfterUpdate()
+    else {
+      await installAppUpdate()
+      if ($updates.phase === 'installed') pushToast({ severity: 'success', title: tr('update.installed'), detail: tr('settings.updates.ready'), durationMs: 8000 })
     }
+    if ($updates.error) pushToast({ severity: 'error', title: tr('update.failed'), detail: $updates.error, durationMs: 8000 })
   }
 </script>
 
@@ -85,14 +31,14 @@
   <button
     type="button"
     class="update-button"
-    class:busy={phase !== 'idle'}
+    class:busy={phase === 'downloading' || phase === 'installing'}
     class:installing={phase === 'installing'}
     onclick={installUpdate}
-    disabled={phase !== 'idle'}
-    aria-label={phase === 'idle'
+    disabled={phase !== 'idle' && phase !== 'installed'}
+    aria-label={phase === 'installed' ? tr('settings.updates.restart') : phase === 'idle'
       ? tr('update.availableAria', { version: update.version })
       : tr('update.progressAria', { progress: progress ?? 0 })}
-    title={phase === 'idle'
+    title={phase === 'installed' ? tr('settings.updates.restartHint') : phase === 'idle'
       ? tr('update.tooltip', { current: currentVersion, next: update.version })
       : phase === 'installing'
         ? tr('update.installing')

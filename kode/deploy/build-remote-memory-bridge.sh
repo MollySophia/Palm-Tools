@@ -36,6 +36,8 @@ TARGET_TRIPLE="${TARGET_TRIPLE:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 APT_MIRROR="${APT_MIRROR:-}"
 APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-}"
+RUST_IMAGE="${RUST_IMAGE:-rust:1.89-bookworm}"
+BASE_IMAGE="${BASE_IMAGE:-rust:1.89-alpine}"
 BUILDER_IMAGE="${BUILDER_IMAGE:-}"
 VERSION="${VERSION:-dev}"
 OUT_DIR="${OUT_DIR:-$ROOT/target/remote-memory-bridge}"
@@ -77,7 +79,7 @@ build_docker() {
 
   DOCKER_BUILDKIT=0 docker build \
     --platform "$DOCKER_PLATFORM" \
-    --build-arg RUST_IMAGE=rust:1.89-bookworm \
+    --build-arg RUST_IMAGE="$RUST_IMAGE" \
     --build-arg APT_MIRROR="$APT_MIRROR" \
     --build-arg APT_SECURITY_MIRROR="$APT_SECURITY_MIRROR" \
     -f "$ROOT/deploy/remote-memory-bridge-builder.Dockerfile" \
@@ -117,6 +119,7 @@ build_docker_musl() {
 
   DOCKER_BUILDKIT=0 docker build \
     --platform "$DOCKER_PLATFORM" \
+    --build-arg BASE_IMAGE="$BASE_IMAGE" \
     -f "$ROOT/deploy/remote-memory-bridge-builder-musl.Dockerfile" \
     -t "$BUILDER_IMAGE" \
     "$ROOT/deploy"

@@ -28,6 +28,7 @@ tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = "1"
 chrono = "0.4"
 # 2026-06:GUI 管理 backend 时改写 ~/.config/kode/config.toml,要求保留用户注释/顺序。
 # 普通 toml crate 是「parse-then-stringify」会丢注释,toml_edit 维持 DOM 增量修改。

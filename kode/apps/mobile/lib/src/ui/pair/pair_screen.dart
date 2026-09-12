@@ -9,6 +9,7 @@ import '../../api/api_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
+import '../glass.dart';
 
 class PairScreen extends ConsumerStatefulWidget {
   const PairScreen({super.key});
@@ -125,8 +126,11 @@ class _PairScreenState extends ConsumerState<PairScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: AppBar(title: const Text('PAIR WITH KODE')),
+    return GlassScaffold(
+      appBar: AppBar(
+        title: const Text('Pair with kode'),
+        flexibleSpace: const GlassNavigationBackground(),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),

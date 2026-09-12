@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_TRIPLE="${TARGET_TRIPLE:-x86_64-unknown-linux-musl}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+BASE_IMAGE="${BASE_IMAGE:-rust:1.89-alpine}"
 BUILDER_IMAGE="${BUILDER_IMAGE:-kode-sync-server-builder:${TARGET_TRIPLE}}"
 CARGO_REGISTRY_VOLUME="${CARGO_REGISTRY_VOLUME:-kode-sync-server-cargo-registry}"
 OUT_DIR="${OUT_DIR:-$ROOT/target/sync-server}"
@@ -18,6 +19,7 @@ fi
 
 DOCKER_BUILDKIT=0 docker build \
   --platform "$DOCKER_PLATFORM" \
+  --build-arg BASE_IMAGE="$BASE_IMAGE" \
   -f "$ROOT/deploy/remote-memory-bridge-builder-musl.Dockerfile" \
   -t "$BUILDER_IMAGE" \
   "$ROOT/deploy"

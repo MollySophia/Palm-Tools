@@ -11,6 +11,7 @@
 //! 3. **CoreEvent 桥接**: kode-core 的 PTY/jsonl 产生 CoreEvent → 后端分发:
 //!    PtyBytes 走 channel(高频),PtyExited / JsonlMeta 走低频 emit(便宜)。
 
+mod app_updates;
 mod backend_admin;
 mod bridge;
 mod cloud_deploy;
@@ -141,6 +142,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_updates::check_app_update,
             commands::list_backends,
             commands::discover_backend_models,
             commands::list_avatar_library,

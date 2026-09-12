@@ -737,9 +737,18 @@ fn parse_codex_response_item(id: SessionId, v: &Value) -> Vec<EventEnvelope> {
 
 fn parse_codex_event_msg(id: SessionId, v: &Value) -> Vec<EventEnvelope> {
     let payload = v.get("payload").unwrap_or(&Value::Null);
-    if payload.get("type").and_then(|x| x.as_str()) != Some("task_complete") {
-        return vec![];
-    }
+    let status = match payload.get("type").and_then(|x| x.as_str()) {
+        Some("task_started") => {
+            return vec![EventEnvelope::new(
+                id,
+                "session.turn_started",
+                json!({"turn_id": payload.get("turn_id")}),
+            )]
+        }
+        Some("task_complete") => "completed",
+        Some("turn_aborted") => "cancelled",
+        _ => return vec![],
+    };
     let summary = payload
         .get("last_agent_message")
         .and_then(|x| x.as_str())
@@ -748,7 +757,7 @@ fn parse_codex_event_msg(id: SessionId, v: &Value) -> Vec<EventEnvelope> {
     let turn_id = payload.get("turn_id").and_then(|x| x.as_str());
     vec![turn_finished_event(
         id,
-        "completed",
+        status,
         summary,
         duration_ms,
         turn_id,
@@ -1350,6 +1359,24 @@ mod tests {
         assert_eq!(evs[0].payload["summary"], "fixed it");
         assert_eq!(evs[0].payload["duration_ms"], 1234);
         assert_eq!(evs[0].payload["turn_id"], "turn_1");
+    }
+
+    #[test]
+    fn codex_start_and_abort_drive_turn_status() {
+        let start = parse_line(
+            16,
+            Backend::Codex,
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn_1"}}"#,
+        );
+        assert_eq!(start[0].r#type, "session.turn_started");
+        assert_eq!(start[0].payload["turn_id"], "turn_1");
+        let abort = parse_line(
+            16,
+            Backend::Codex,
+            r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn_1"}}"#,
+        );
+        assert_eq!(abort[0].r#type, "session.turn_finished");
+        assert_eq!(abort[0].payload["status"], "cancelled");
     }
 
     #[test]

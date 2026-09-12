@@ -78,6 +78,11 @@ pub trait BackendProfile: Send + Sync {
     fn kind(&self) -> Backend;
     fn usage_key(&self) -> &'static str;
 
+    /// Decorative idle redraws must not count as agent work.
+    fn has_idle_animation(&self) -> bool {
+        false
+    }
+
     fn supports_session_id_flag(&self) -> bool {
         false
     }
@@ -230,6 +235,9 @@ impl BackendProfile for ClaudeProfile {
 }
 
 impl BackendProfile for CodexProfile {
+    fn has_idle_animation(&self) -> bool {
+        true
+    }
     fn kind(&self) -> Backend {
         Backend::Codex
     }

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/providers.dart';
+import '../glass.dart';
 
 class DevicesScreen extends ConsumerStatefulWidget {
   const DevicesScreen({super.key});
@@ -107,8 +108,11 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     final activeKey = ref.watch(endpointProvider)?.storageKey;
     final colors = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('DEVICES')),
+    return GlassScaffold(
+      appBar: AppBar(
+        title: const Text('Devices'),
+        flexibleSpace: const GlassNavigationBackground(),
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -136,9 +140,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                   final active = endpoint.storageKey == activeKey;
                   final busy = endpoint.storageKey == _busyKey;
                   final uri = Uri.tryParse(endpoint.baseUrl);
-                  return Card(
-                    margin: EdgeInsets.zero,
-                    clipBehavior: Clip.antiAlias,
+                  return GlassSurface(
                     child: ListTile(
                       minVerticalPadding: 12,
                       leading: CircleAvatar(

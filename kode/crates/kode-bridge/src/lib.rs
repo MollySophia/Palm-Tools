@@ -616,6 +616,11 @@ fn spawn_turn_hold_from_bus(ctx: Arc<Ctx>) {
         let mut rx = ctx.bus.subscribe();
         loop {
             match rx.recv().await {
+                Ok(env) if env.r#type == "session.turn_started" => {
+                    if let Some(s) = ctx.sessions.lock().get_mut(&env.session_id) {
+                        s.mark_turn_start();
+                    }
+                }
                 Ok(env) if env.r#type == "session.turn_finished" => {
                     if let Some(s) = ctx.sessions.lock().get_mut(&env.session_id) {
                         s.mark_turn_end();

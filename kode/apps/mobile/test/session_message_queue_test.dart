@@ -265,8 +265,45 @@ void main() {
     await tester.pump();
     expect(find.text('SENT'), findsOneWidget);
 
-    events.add(_userMessageEvent('keep this visible'));
+    // Leaving/reopening before the canonical message arrives must retain SENT.
+    // First remain on this exact route through receipts and status redraws.
+    for (var i = 0; i < 20; i++) {
+      events.add(_commandEvent('executed', commandId: 'cmd-visible'));
+      events.add(
+        Envelope(
+          protocolVersion: 'v1',
+          schemaVersion: 1,
+          sessionId: 7,
+          ts: DateTime.now().millisecondsSinceEpoch,
+          type: 'session.status',
+          payload: {'status': i.isEven ? 'busy' : 'idle'},
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.text('keep this visible'), findsOneWidget);
+      expect(find.text('SENT'), findsOneWidget);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: KillLaTheme.light(),
+          home: const SessionDetailScreen(sessionId: 7),
+        ),
+      ),
+    );
+    expect(find.text('keep this visible'), findsOneWidget);
+    expect(find.text('SENT'), findsOneWidget);
     await tester.pump();
+    expect(find.text('keep this visible'), findsOneWidget);
+
+    events.add(_userMessageEvent('keep this visible'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(sessionMessageQueueProvider)[7]!.single.status,
+      SessionMessageQueueStatus.processed,
+    );
     expect(find.text('keep this visible'), findsOneWidget);
     expect(find.text('PROCESSED'), findsOneWidget);
   });

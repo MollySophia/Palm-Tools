@@ -1060,6 +1060,11 @@ fn spawn_attention_forwarder(
                                 }),
                             );
                         }
+                        "session.turn_started" => {
+                            if let Some(s) = sessions.lock().get_mut(&env.session_id) {
+                                s.mark_turn_start();
+                            }
+                        }
                         "session.turn_finished" => {
                             {
                                 let mut g = sessions.lock();

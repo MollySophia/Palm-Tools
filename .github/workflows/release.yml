@@ -17,6 +17,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Require updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 != '' }}
+          HAS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD != '' }}
+        run: |
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "::error::Set TAURI_SIGNING_PRIVATE_KEY in Actions secrets to the original key matching kode's updater public key."
+            exit 1
+          fi
+          if [[ "$HAS_APPLE_CERTIFICATE" != "$HAS_APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "::error::Configure both APPLE_DEVELOPER_ID_P12_BASE64 and APPLE_DEVELOPER_ID_P12_PASSWORD."
+            exit 1
+          fi
+
       - name: Build musl remote memory bridge
         working-directory: kode
         run: bash deploy/build-remote-memory-bridge.sh --musl
@@ -165,7 +180,36 @@ jobs:
         working-directory: kode
         env:
           KODE_FORCE_DMG: "1"
-        run: ./run.sh app
+          CONFIGURED_APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$CONFIGURED_APPLE_SIGNING_IDENTITY" ]]; then
+            export APPLE_SIGNING_IDENTITY="$CONFIGURED_APPLE_SIGNING_IDENTITY"
+          fi
+          # Empty notarization variables must not count as configured credentials.
+          if [[ -z "$APPLE_ID" && -z "$APPLE_PASSWORD" && -z "$APPLE_TEAM_ID" ]]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          elif [[ -z "$APPLE_ID" || -z "$APPLE_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "::error::Configure all three notarization secrets: APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID."
+            exit 1
+          fi
+          ./run.sh app
+
+      - name: Verify complete app signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 kode/target/release/bundle/macos/kode.app
+          if [[ "$APPLE_SIGNING_AVAILABLE" == 'true' ]]; then
+            codesign -dv --verbose=4 kode/target/release/bundle/macos/kode.app 2>&1 | grep 'Authority=Developer ID Application:'
+          fi
+
+      - name: Install updater signature verifier
+        run: brew install minisign
+
+      - name: Verify updater package against embedded public key
+        working-directory: kode
+        run: python3 deploy/verify-updater.py target/release/bundle/macos/kode.app.tar.gz
 
       - name: Verify macOS bundle architecture
         env:
@@ -262,6 +306,8 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: |
             release-assets/macos/*
             release-assets/remote-bridge/kode-remote-memory-bridge-x86_64-unknown-linux-musl.tar.gz

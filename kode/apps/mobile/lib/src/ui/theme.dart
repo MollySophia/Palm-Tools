@@ -1,4 +1,4 @@
-/// Kode Flutter theme — aligned with apps/gui/index.html design tokens.
+/// Kode Flutter theme — iOS-inspired glass chrome with Kode semantic accents.
 ///
 /// 设计语言:
 ///   - green-tinted neutral surfaces + soft green accent
@@ -26,9 +26,9 @@ class KillLaColors {
   KillLaColors._();
 
   // ---- Dark (主皮)----
-  static const bgPrimary = Color(0xFF141815);
-  static const bgSecondary = Color(0xFF1A1F1B);
-  static const bgTertiary = Color(0xFF222922);
+  static const bgPrimary = Color(0xFF101419);
+  static const bgSecondary = Color(0xFF20282E);
+  static const bgTertiary = Color(0xFF2B353C);
 
   /// Kode desktop accent.
   static const accent = Color(0xFF9FE870);
@@ -52,9 +52,9 @@ class KillLaColors {
   static const borderStrong = Color(0xFF465047);
 
   // ---- Light (副皮,同样保持绿色中性调,避免与 dark 反差过猛)----
-  static const lightBg = Color(0xFFEFF2ED);
-  static const lightSurface = Color(0xFFE4E9E2);
-  static const lightElevated = Color(0xFFF8FAF6);
+  static const lightBg = Color(0xFFF2F5F7);
+  static const lightSurface = Color(0xFFE8EEF0);
+  static const lightElevated = Color(0xFFFCFDFE);
   static const lightAccent = Color(0xFF2D704A);
   static const lightAccentHover = Color(0xFF397E57);
   static const lightDanger = Color(0xFFB54750);
@@ -105,6 +105,7 @@ class KillLaTheme {
       primary: KillLaColors.accent,
       onPrimary: onAccent,
       secondary: KillLaColors.warning,
+      tertiary: KillLaColors.busy,
       onSecondary: Colors.black,
       error: KillLaColors.danger,
       onError: onAccent,
@@ -137,6 +138,7 @@ class KillLaTheme {
       primary: KillLaColors.lightAccent,
       onPrimary: onAccent,
       secondary: KillLaColors.lightWarning,
+      tertiary: KillLaColors.lightBusy,
       onSecondary: Colors.black,
       error: KillLaColors.lightDanger,
       onError: onAccent,
@@ -211,12 +213,13 @@ class KillLaTheme {
       labelSmall: TextStyle(color: textMuted, fontFamily: bodyFamily),
     );
 
-    const radSm = 8.0;
-    const radMd = 10.0;
-    const radLg = 14.0;
+    const radSm = 16.0;
+    const radMd = 22.0;
+    const radLg = 28.0;
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: bodyFamily,
       colorScheme: scheme,
       brightness: scheme.brightness,
       scaffoldBackgroundColor: bg,
@@ -226,17 +229,17 @@ class KillLaTheme {
       textTheme: textTheme,
 
       appBarTheme: AppBarTheme(
-        backgroundColor: surfaceLow,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
         foregroundColor: textPrimary,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
-        shape: Border(bottom: BorderSide(color: border, width: 1)),
         titleTextStyle: TextStyle(
           color: textPrimary,
           fontWeight: FontWeight.w700,
           fontSize: 16,
-          letterSpacing: 0.4,
+          letterSpacing: -0.3,
           fontFamily: headingFamily,
         ),
         iconTheme: IconThemeData(color: textPrimary),
@@ -244,11 +247,12 @@ class KillLaTheme {
       ),
 
       cardTheme: CardThemeData(
-        color: surfaceLow,
+        color: surfaceHi.withValues(alpha: .72),
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radMd),
-          side: BorderSide(color: border, width: 1),
+          side: BorderSide(color: border.withValues(alpha: .5), width: .7),
         ),
         margin: EdgeInsets.zero,
       ),
@@ -264,8 +268,9 @@ class KillLaTheme {
           ),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           textStyle: const TextStyle(
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.6,
+            fontFamily: bodyFamily,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0,
           ),
         ),
       ),
@@ -279,6 +284,7 @@ class KillLaTheme {
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           textStyle: const TextStyle(
+            fontFamily: bodyFamily,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.4,
           ),
@@ -321,7 +327,7 @@ class KillLaTheme {
       listTileTheme: ListTileThemeData(
         iconColor: textSecondary,
         textColor: textPrimary,
-        tileColor: surfaceLow,
+        tileColor: Colors.transparent,
         selectedTileColor: accent.withValues(alpha: 0.18),
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       ),
@@ -356,7 +362,7 @@ class KillLaTheme {
         backgroundColor: surfaceLow,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radLg),
-          side: BorderSide(color: accent, width: 1.5),
+          side: BorderSide(color: border, width: .7),
         ),
         titleTextStyle: TextStyle(
           color: textPrimary,

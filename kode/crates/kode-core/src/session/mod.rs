@@ -232,7 +232,9 @@ impl Session {
             pty: Some(pty),
             parser,
             state,
-            busy: BusyHeuristic::new(idle_threshold),
+            busy: BusyHeuristic::new(idle_threshold).with_pty_activity_as_work(
+                !backend::profile_for_key(backend_key).is_some_and(|p| p.has_idle_animation()),
+            ),
             cols,
             rows,
             retarget_tx,
@@ -309,10 +311,8 @@ impl Session {
 
         self.parser.process(complete);
         self.busy.touch();
-        if matches!(self.state.status, Status::Starting | Status::Idle) {
-            self.state.status = Status::Busy;
-        }
-        if !is_active {
+        self.tick_status();
+        if !is_active && self.busy.is_busy() {
             self.state.unread = true;
         }
     }
@@ -324,7 +324,7 @@ impl Session {
         }
         if self.busy.is_busy() {
             self.state.status = Status::Busy;
-        } else if matches!(self.state.status, Status::Busy) {
+        } else if matches!(self.state.status, Status::Starting | Status::Busy) {
             self.state.status = Status::Idle;
         }
     }
@@ -1295,6 +1295,48 @@ mod tests {
     }
 
     // ============== Session::feed UTF-8 拼接 ==============
+
+    #[test]
+    fn codex_idle_redraw_preserves_idle_and_unread() {
+        let profile = backend::profile_for_key("codex").unwrap();
+        let mut s = Session {
+            id: 1,
+            backend_key: "codex".into(),
+            cwd: PathBuf::from("/tmp"),
+            command: String::new(),
+            args: vec![],
+            session_id: None,
+            pty: None,
+            parser: vt100::Parser::new(24, 80, 0),
+            state: SessionState::new("test", "auto"),
+            busy: BusyHeuristic::new(Duration::from_secs(1))
+                .with_pty_activity_as_work(!profile.has_idle_animation()),
+            cols: 80,
+            rows: 24,
+            retarget_tx: None,
+            feed_remnant: vec![],
+        };
+        s.feed("▘ idle animation".as_bytes(), false);
+        assert_eq!(s.state.status, Status::Idle);
+        assert!(!s.state.unread);
+        assert!(s.parser.screen().contents().contains("idle animation"));
+        s.mark_turn_start();
+        s.feed(b"working", false);
+        assert_eq!(s.state.status, Status::Busy);
+        assert!(s.state.unread);
+        s.mark_turn_end();
+        s.state.unread = false;
+        s.feed(b"next animation frame", false);
+        assert_eq!(s.state.status, Status::Idle);
+        assert!(!s.state.unread);
+        s.mark_turn_start();
+        s.write_input(b"\x1b");
+        s.feed(b"cancelled animation", false);
+        assert_eq!(s.state.status, Status::Idle);
+        s.mark_exited(Some(0));
+        s.feed(b"late frame", false);
+        assert_eq!(s.state.status, Status::Exited(Some(0)));
+    }
 
     #[test]
     fn feed_stitches_truncated_utf8_across_chunks() {

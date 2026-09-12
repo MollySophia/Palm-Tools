@@ -57,13 +57,19 @@
     "shortDescription": "Multi-tab AI session manager",
     "longDescription": "kode — manage multiple codebuddy / claude code sessions in one window.",
     "macOS": {
+      "dmg": {
+        "background": "dmg/background.png",
+        "windowSize": { "width": 660, "height": 420 },
+        "appPosition": { "x": 180, "y": 205 },
+        "applicationFolderPosition": { "x": 480, "y": 205 }
+      },
       "signingIdentity": "Developer ID Application: Xiaosong Wang (CRY5MTFJN7)",
       "entitlements": "./Entitlements.plist"
     }
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNFMDBDNDg1NUEyRkE2QUUKUldTdXBpOWFoY1FBUGtnS002YTZwWUdQMUFmQjB0SkxrNGNEWWoxK1dvZzV1Sml3djZxNVVpSXIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1NEE2NTNFNTNCMUJGRDIKUldUU3Y3RlRQbVZLMVpBclFMUWxIa2tlNno3S2VUR1ZVcjdYMVQwKzVDUi9ick1FZ0J4ckNHd1QK",
       "endpoints": [
         "https://github.com/TencentYoutuResearch/Palm-Tools/releases/latest/download/latest.json"
       ]

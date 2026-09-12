@@ -1530,6 +1530,9 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(test)]
+mod multidevice_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};

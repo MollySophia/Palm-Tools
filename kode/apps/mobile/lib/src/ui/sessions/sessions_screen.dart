@@ -9,6 +9,7 @@ import '../../api/api_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
+import '../glass.dart';
 import 'backend_identity.dart';
 
 String _compactTokens(int value) {
@@ -116,8 +117,9 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     // 触发 attention notifier 启动监听 — 不读值这里,_SessionTile 自己 watch
     ref.watch(sessionAttentionProvider);
 
-    return Scaffold(
+    return GlassScaffold(
       appBar: AppBar(
+        flexibleSpace: const GlassNavigationBackground(),
         title: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: () => context.push('/devices'),
@@ -128,7 +130,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               children: [
                 Flexible(
                   child: Text(
-                    'kode · ${endpoint?.deviceName ?? '?'}'.toUpperCase(),
+                    'kode · ${endpoint?.deviceName ?? '?'}',
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -250,12 +252,7 @@ class _PathGroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.outline),
-      ),
+    return GlassSurface(
       child: Column(
         children: [
           Tooltip(

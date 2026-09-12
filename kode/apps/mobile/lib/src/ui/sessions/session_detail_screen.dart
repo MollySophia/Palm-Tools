@@ -23,9 +23,11 @@ import 'package:speech_to_text/speech_to_text.dart';
 import '../../protocol/protocol.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
+import '../glass.dart';
 import 'backend_identity.dart';
 import 'message_markdown.dart';
 import 'speech_locale.dart';
+import 'session_send_button.dart';
 
 String _compactTokens(int value) {
   if (value >= 1000000) {
@@ -117,6 +119,27 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
       ..viewSession(widget.sessionId);
     _scrollCtrl.addListener(_handleScroll);
     _inputFocus.addListener(_handleComposerFocus);
+    // A route rebuild must not drop messages awaiting the CLI transcript.
+    for (final message
+        in ref.read(sessionMessageQueueProvider)[widget.sessionId] ??
+            <QueuedSessionMessage>[]) {
+      if (message.status == SessionMessageQueueStatus.processed) continue;
+      _upsert(
+        _Item(
+          key: 'm-local-${message.id}',
+          type: 'message',
+          ts: message.queuedAt.millisecondsSinceEpoch,
+          payload: {
+            'id': message.semanticMessageId,
+            'outbound_id': message.id,
+            'role': 'user',
+            'text': message.text,
+            'timestamp_ms': message.queuedAt.millisecondsSinceEpoch,
+            'optimistic': true,
+          },
+        ),
+      );
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // 注意:**不**在这里清 attention。用户只是点开屏幕看一眼,prompt 还卡着,
       // attention 应该继续提示。session.attention_cleared 事件由 server 推过来
@@ -702,9 +725,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
-    return Scaffold(
+    return GlassScaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
+        flexibleSpace: const GlassNavigationBackground(),
         toolbarHeight: 56,
         titleSpacing: 0,
         title: _SessionHeaderTitle(
@@ -739,7 +763,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
             children: [
               if (attentionKind != null) _AttentionBanner(kind: attentionKind),
               Expanded(
-                child: !_historyLoaded
+                child: !_historyLoaded && _items.isEmpty
                     ? const Center(child: CircularProgressIndicator())
                     : _historyError != null && _items.isEmpty
                     ? Center(
@@ -818,7 +842,16 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
                         ],
                       ),
               ),
-              _buildInput(backendIdentity(backendKey).label),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+                child: GlassSurface(
+                  blur: true,
+                  child: _buildInput(
+                    backendIdentity(backendKey).label,
+                    working: sessionStatus == 'busy',
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -906,18 +939,13 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     }).toList();
   }
 
-  Widget _buildInput(String backendLabel) {
+  Widget _buildInput(String backendLabel, {required bool working}) {
     final colors = Theme.of(context).colorScheme;
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: _inputCtrl,
       builder: (context, value, _) {
-        final canSend = value.text.trim().isNotEmpty;
-        return Container(
+        return Padding(
           padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            border: Border(top: BorderSide(color: colors.outline)),
-          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -984,30 +1012,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
                     ),
                   ),
                   const SizedBox(width: 7),
-                  Semantics(
-                    button: true,
-                    label: 'Send message',
-                    child: Tooltip(
-                      message: 'Send message',
-                      child: SizedBox(
-                        width: 48,
-                        height: 46,
-                        child: FilledButton(
-                          onPressed: canSend ? _send : null,
-                          style: FilledButton.styleFrom(
-                            elevation: 0,
-                            padding: EdgeInsets.zero,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(13),
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.arrow_upward_rounded,
-                            size: 23,
-                          ),
-                        ),
-                      ),
-                    ),
+                  SessionSendButton(
+                    working: working,
+                    text: value.text,
+                    onSend: _send,
                   ),
                 ],
               ),
@@ -1411,7 +1419,7 @@ class _MessageBubble extends StatelessWidget {
               ? (deliveryFailed
                     ? colors.error.withValues(alpha: 0.11)
                     : colors.primary)
-              : colors.surface);
+              : colors.surface.withValues(alpha: .84));
     final bubbleBorder = isSystem
         ? colors.outline
         : (isUser

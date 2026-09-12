@@ -160,10 +160,10 @@ set_tauri_resource_args() {
 }
 
 # tauri.conf.json 钉死了 Developer ID 签名证书。本机 keychain 没有该证书时,
-# codesign 会失败;DMG 步骤也需要证书签名。这里检测后自动降级:
-#   - 无证书 → ad-hoc 签名(signingIdentity=null)+ 只打 .app(跳过 DMG)
+# codesign 会失败;这里检测后自动降级:
+#   - 无证书 → ad-hoc 签名(signingIdentity="-")+ .app + .dmg
 #   - 有证书 → 走原配置(打 .app + .dmg)
-# CI 可设 KODE_FORCE_DMG=1 在 ad-hoc 模式下也生成 DMG(用户需手动绕过 Gatekeeper)。
+# 显式 KODE_FORCE_DMG=0 可在 ad-hoc 模式下只打 .app。
 SIGN_ARGS=()
 BUNDLE_TARGETS=()
 SIGN_ADHOC=0
@@ -172,16 +172,50 @@ set_signing_args() {
   BUNDLE_TARGETS=()
   SIGN_ADHOC=0
   if ! security find-identity -p codesigning -v 2>/dev/null | grep -q "Developer ID Application"; then
-    SIGN_ARGS=(--config '{"bundle":{"macOS":{"signingIdentity":null}}}')
+    SIGN_ARGS=(--config '{"bundle":{"macOS":{"signingIdentity":"-"}}}')
     SIGN_ADHOC=1
-    if [ "${KODE_FORCE_DMG:-0}" = "1" ]; then
-      warn "未找到 Developer ID 签名证书 → ad-hoc 签名,KODE_FORCE_DMG=1 → 打 .app + .dmg"
+    if [ "${KODE_FORCE_DMG:-1}" = "1" ]; then
+      warn "未找到 Developer ID 签名证书 → ad-hoc 签名,打 .app + .dmg"
       BUNDLE_TARGETS=(--bundles app,dmg)
     else
       warn "未找到 Developer ID 签名证书 → ad-hoc 签名,只打 .app(跳过 DMG)"
       BUNDLE_TARGETS=(--bundles app)
     fi
   fi
+}
+
+# CI/调用者显式提供的密钥优先;本地开发机自动加载忽略目录中的密钥。
+# 不打印密钥或密码,不把它们写入构建产物。加密密钥的密码由环境提供。
+set_updater_signing_key() {
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+    local updater_key="$ROOT_DIR/.tauri/kode-updater.key"
+    if [ ! -s "$updater_key" ] || [ ! -r "$updater_key" ]; then
+      error "缺少更新私钥:设置 TAURI_SIGNING_PRIVATE_KEY,或恢复 .tauri/kode-updater.key 后再打包"
+    fi
+    TAURI_SIGNING_PRIVATE_KEY="$(cat "$updater_key")"
+    export TAURI_SIGNING_PRIVATE_KEY
+    info "已加载本地更新签名密钥"
+  fi
+  if [ "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" != x ]; then
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD=''
+    if [ -t 0 ]; then
+      read -r -s -p "更新私钥密码(未设置则直接回车): " TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+      printf '\n'
+    fi
+    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+  fi
+}
+
+# 在耗时编译前验证私钥和密码,签名内容只是临时测试文本。
+validate_updater_signing_key() {
+  local signing_probe_dir
+  signing_probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/kode-signing-probe.XXXXXX")"
+  printf 'kode updater signing preflight\n' > "$signing_probe_dir/probe"
+  if ! "${PNPM_CMD[@]}" --dir "$GUI_DIR" tauri signer sign "$signing_probe_dir/probe" >/dev/null 2>&1; then
+    rm -rf "$signing_probe_dir"
+    error "更新签名预检失败:请确认私钥有效且 TAURI_SIGNING_PRIVATE_KEY_PASSWORD 正确。可在交互终端运行 ./run.sh app 并输入密码。"
+  fi
+  rm -rf "$signing_probe_dir"
 }
 
 CMD="${1:-help}"
@@ -239,7 +273,9 @@ case "$CMD" in
   # 打包 / 安装
   # ===========================================================
   app|release)
+    set_updater_signing_key
     ensure_node_modules
+    validate_updater_signing_key
     ensure_sync_server_bundle
     APP_PATH="$ROOT_DIR/target/release/bundle/macos/kode.app"
     DMG_DIR="$ROOT_DIR/target/release/bundle/dmg"
@@ -260,8 +296,8 @@ case "$CMD" in
     shopt -s nullglob
     DMG_FILES=("$DMG_DIR"/kode_*.dmg)
     shopt -u nullglob
-    # ad-hoc 模式只产 .app(跳过了 DMG);有证书时要求 .app + .dmg 都在。
-    if [ -d "$APP_PATH" ] && { [ "$SIGN_ADHOC" -eq 1 ] || [ ${#DMG_FILES[@]} -gt 0 ]; }; then
+    # 只有显式关闭 ad-hoc DMG 时才允许仅有 .app。
+    if [ -d "$APP_PATH" ] && { { [ "$SIGN_ADHOC" -eq 1 ] && [ "${KODE_FORCE_DMG:-1}" = "0" ]; } || [ ${#DMG_FILES[@]} -gt 0 ]; }; then
       info "产物 → $APP_PATH"
       if [ ${#DMG_FILES[@]} -gt 0 ]; then
         for dmg in "${DMG_FILES[@]}"; do

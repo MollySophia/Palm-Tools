@@ -21,6 +21,7 @@
   } from './ipc'
   import type { UnlistenFn } from '@tauri-apps/api/event'
   import BackendIcon from './BackendIcon.svelte'
+  import UpdateSettings from './UpdateSettings.svelte'
   import { currentLocale, systemLanguageLabel, t } from './i18n'
   import {
     SCREENSHOT_MODE_OPTIONS,
@@ -52,7 +53,7 @@
   }
   let { onClose, onOpenMemorySync, onOpenPlugins, onTakeScreenshot, locale, onLocaleChange }: Props = $props()
 
-  type Tab = 'backends' | 'plugins' | 'memory' | 'terminal' | 'capture' | 'language'
+  type Tab = 'backends' | 'plugins' | 'memory' | 'terminal' | 'capture' | 'language' | 'updates'
   let tab: Tab = $state('backends')
 
   let backends: BackendListItem[] = $state([])
@@ -379,6 +380,10 @@
           <path d="M4 5h10M9 3v2m1.5 0a12 12 0 0 1-5 9M6 9a12 12 0 0 0 5 5M14 19l4-9 4 9M15.5 16h5" />
         </svg>
         <span>{tr('settings.language.title')}</span>
+      </button>
+      <button class="nav-item" class:active={tab === 'updates'} onclick={() => (tab = 'updates')}>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 20h14" /></svg>
+        <span>{tr('settings.updates.title')}</span>
       </button>
       <div class="nav-spacer"></div>
       <button class="nav-close" onclick={onClose} aria-label={tr('settings.close')}>
@@ -741,6 +746,8 @@
             {tr('settings.capture.takeNow')}
           </button>
         </div>
+      {:else if tab === 'updates'}
+        <UpdateSettings />
       {:else if tab === 'language'}
         <div class="content-head">
           <h2>{tr('settings.language.title')}</h2>

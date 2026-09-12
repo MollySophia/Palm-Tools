@@ -62,7 +62,19 @@ kode should feel like a compact operations desk built around a terminal: calm in
 - **Anti-references:** Avoid generic metric-card dashboards, gamer-terminal neon, heavy glassmorphism, soft pastel consumer UI, and oversized marketing typography.
 - **Token ownership/runtime mapping:** This file mirrors the established runtime source of truth in `apps/gui/index.html`. Components consume its CSS variables; this document does not generate code. `pnpm check` and production build are the drift gates.
 
+## Software update settings
+
+The session-only “Debug: ignore local version” switch sits below Beta, defaults off, and names reinstall/downgrade behavior. It shares the same request invalidation and installation lock as the channel switch. Signature verification remains mandatory; restart clears this testing override.
+
+The update page reuses the existing settings navigation, compact controls, semantic tokens and shared English/Chinese locale owner. One persistent Beta switch, current version, status and named actions form the hierarchy. `app_updates.ts` is the shared state owner for settings and the title bar; busy, error, incomplete-release and installed states stay consistent between them. Installation and restart are separate actions so ongoing terminal work is not interrupted automatically.
+
 ## Colors
+
+### DMG installation window
+
+The PNG is rendered at 1320 × 840 pixels with a 660 × 420 point size (144 DPI), preserving Finder layout while providing native Retina detail.
+
+The Finder installation window follows the user's Docker reference: a near-white background, one English line “Drag kode to Applications”, a gray arrow and the two real draggable icons. No subtitle, footer or Chinese copy. The 660 × 420 layout reserves icon centers at (180, 205) and (480, 205). `deploy/render-dmg-background.swift` owns the reproducible artwork; `apps/gui/src-tauri/dmg/background.png` is the committed bundle asset, configured through Tauri's macOS DMG settings.
 
 Dark mode is canonical and uses near-black green-neutral surfaces with one crisp green accent. Light mode is a functional counterpart defined in `apps/gui/index.html`, not an independent visual identity. Accent means current/committed action; success, warning, danger, and info retain semantic roles and always pair with text or icons. Borders and tonal surfaces establish hierarchy before shadows. Focus uses the accent token and must remain visible in both themes and forced colors.
 
@@ -105,6 +117,16 @@ Mobile session rows show a compact unread-message count for assistant messages r
 Mobile device bindings use a dedicated device ledger. The current desktop is named in the session AppBar and marked with explicit `Current` text in management; switching devices verifies connectivity before replacing the active API/WebSocket context. Adding a QR binding appends or refreshes one device without replacing unrelated credentials.
 
 ### Forms and overlays
+
+The Flutter companion uses an iOS-inspired glass variant, requested for mobile.
+`apps/mobile/lib/src/ui/theme.dart` owns its cool neutral surfaces (#101419 dark,
+#F2F5F7 light), existing Kode green accent, SF system typography, and 16/22/28px
+control/card/dialog radii. `glass.dart` owns the shared route backdrop and clipped
+materials: navigation and composer blur at sigma 18; scrolling device/session
+cards use translucent gradients without per-row blur. Fine white edge highlights
+replace heavy outlines. Message text remains opaque on highly readable surfaces.
+High contrast and disabled animations use solid materials without blur. This is
+a mobile-specific visual variant; desktop styling remains governed above.
 
 Fields use owned labels, dark input surfaces, border focus plus a soft ring, and inline recovery. Drawers and dialogs use application-owned surfaces, Escape behavior, and stable actions. Toasts use the shared `ToastHost`; actionable failures also remain inline.
 

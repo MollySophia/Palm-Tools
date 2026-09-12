@@ -149,6 +149,25 @@ traffic to the chosen service port.
 
 ## Multiple deployment backends
 
+### Multiple desktops on one center
+
+Several independent Kode installations can use the same sync server URL. Each
+installation registers its own device identity and opens its own outbound agent
+WebSocket. Pair each desktop separately: the phone's Devices screen adds QR
+bindings without replacing existing ones, and stores credentials by server URL
+plus device ID. Tapping a saved desktop probes its API and activates that binding.
+The session header names the selected desktop.
+
+Changing the selected desktop replaces the phone's API and WebSocket context;
+late refresh responses from the previous context must not overwrite the new
+session list. Switching does not revoke bindings or stop other desktops from
+uploading. The center scopes REST reads, event fanout, and command routing to the
+device authorized by each binding. An offline desktop rejects input without
+affecting other connected desktops. Each desktop must be paired before uploading;
+sharing a server URL alone does not grant access to another device.
+
+### Switching a desktop's deployment backend
+
 `cloud-sync.json` stores a list of sync backends and one active backend. Each
 backend owns its URL, optional SSH deployment metadata, device identity/token,
 and command receipt ledger. Switching a backend restarts the outbound agent

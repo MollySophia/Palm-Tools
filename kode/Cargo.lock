@@ -2472,6 +2472,7 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

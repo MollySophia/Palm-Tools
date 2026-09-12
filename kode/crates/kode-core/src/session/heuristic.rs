@@ -15,6 +15,7 @@ pub struct BusyHeuristic {
     last_byte_at: Option<Instant>,
     threshold: Duration,
     turn_hold: AtomicBool,
+    pty_counts_as_work: bool,
 }
 
 impl Clone for BusyHeuristic {
@@ -23,6 +24,7 @@ impl Clone for BusyHeuristic {
             last_byte_at: self.last_byte_at,
             threshold: self.threshold,
             turn_hold: AtomicBool::new(self.turn_hold.load(Ordering::Relaxed)),
+            pty_counts_as_work: self.pty_counts_as_work,
         }
     }
 }
@@ -33,11 +35,17 @@ impl BusyHeuristic {
             last_byte_at: None,
             threshold,
             turn_hold: AtomicBool::new(false),
+            pty_counts_as_work: true,
         }
     }
 
     pub fn touch(&mut self) {
         self.last_byte_at = Some(Instant::now());
+    }
+
+    pub fn with_pty_activity_as_work(mut self, enabled: bool) -> Self {
+        self.pty_counts_as_work = enabled;
+        self
     }
 
     /// 本轮 agent 还在跑(提交 prompt / PreToolUse)。PTY 静默时也保持 busy。
@@ -63,14 +71,14 @@ impl BusyHeuristic {
         }
     }
 
-    /// UI 状态:turn hold 或 PTY 仍在刷。
+    /// UI 状态:turn hold;仅无空闲动画的 backend 将 PTY 重绘也计为工作。
     pub fn is_busy(&self) -> bool {
-        self.is_turn_held() || self.is_pty_busy()
+        self.is_turn_held() || (self.pty_counts_as_work && self.is_pty_busy())
     }
 
     /// 距离下次需要可能状态翻转的时间(用于驱动主循环 tick)
     pub fn next_tick_in(&self) -> Option<Duration> {
-        if self.is_turn_held() {
+        if self.is_turn_held() || !self.pty_counts_as_work {
             return None;
         }
         let t = self.last_byte_at?;
@@ -87,6 +95,23 @@ impl BusyHeuristic {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn idle_animation_does_not_override_turn_lifecycle() {
+        let mut h = BusyHeuristic::new(Duration::from_secs(1)).with_pty_activity_as_work(false);
+        h.touch();
+        assert!(h.is_pty_busy());
+        assert!(!h.is_busy());
+        h.hold_turn();
+        assert!(h.is_busy());
+        h.release_turn();
+        for _ in 0..10 {
+            h.touch();
+            assert!(!h.is_busy());
+        }
+        assert!(!h.clone().is_busy());
+        assert!(h.next_tick_in().is_none());
+    }
 
     #[test]
     fn pty_silence_is_idle_without_hold() {

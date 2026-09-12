@@ -131,3 +131,36 @@ test('dark and light palettes keep the same semantic slot ordering', () => {
   assert.equal(light[2], '#FF6B6B')
   assert.equal(light[3], '#71D47D')
 })
+
+test('Unicode block glyphs cannot disable subsequent input background adaptation', () => {
+  for (const glyph of ['▘', '▝', '▐', '雪', '😀']) {
+    const input = `${glyph}\x1b[48;2;40;40;40m input \x1b[0m`
+    assert.equal(transform(input), `${glyph}\x1b[48;5;16m input \x1b[0m`, glyph)
+  }
+})
+
+test('UTF-8 continuation bytes remain text at every PTY chunk boundary', () => {
+  const input = encoder.encode('▘▝雪😀\x1b[48;2;40;40;40m input \x1b[0m')
+  const expected = '▘▝雪😀\x1b[48;5;16m input \x1b[0m'
+  for (let split = 1; split < input.length; split++) {
+    const adapter = new TerminalAnsiThemeAdapter()
+    const a = adapter.transform(input.subarray(0, split))
+    const b = adapter.transform(input.subarray(split))
+    assert.equal(decoder.decode(Uint8Array.from([...a, ...b, ...adapter.flush()])), expected, `split ${split}`)
+  }
+})
+
+test('Unicode ST-looking bytes do not terminate OSC; real terminators still work', () => {
+  const input = '\x1b]0;▜\x1b[48;2;40;40;40mtitle\x07\x1b[48;2;40;40;40mvisible'
+  assert.equal(transform(input), '\x1b]0;▜\x1b[48;2;40;40;40mtitle\x07\x1b[48;5;16mvisible')
+})
+
+test('standalone C1 controls still work and reset clears partial UTF-8', () => {
+  const adapter = new TerminalAnsiThemeAdapter()
+  const csi = Uint8Array.from([0x9b, ...encoder.encode('48;2;40;40;40mtext')])
+  const expected = Uint8Array.from([0x9b, ...encoder.encode('48;5;16mtext')])
+  assert.deepEqual(adapter.transform(csi), expected)
+  adapter.transform(Uint8Array.of(0xe2))
+  adapter.reset()
+  assert.deepEqual(adapter.transform(csi), expected)
+})
