@@ -31,14 +31,40 @@ hdr()   { printf '\n%s%s== %s ==%s\n' "$B" "$C" "$*" "$N"; }
 ensure_node_modules() {
   if [ ! -d "$GUI_DIR/node_modules" ]; then
     info "node_modules 不存在,在 $GUI_DIR 里跑 pnpm install"
-    (cd "$GUI_DIR" && pnpm install)
+    (cd "$GUI_DIR" && "${PNPM_CMD[@]}" install)
   fi
+}
+
+PNPM_CMD=()
+
+ensure_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+  if command -v corepack >/dev/null 2>&1; then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+  error "需要 pnpm(或 corepack)。请先安装 Node 22+，或者启用 corepack。"
 }
 
 # pnpm 11 要求 Node >= 22.13。用户默认 shell 可能还是 Node 20,
 # 这里在脚本进程内自动经 nvm 切到 v22(不改用户的全局 default),避免每次手敲 nvm use。
 ensure_node() {
+  if ! command -v node >/dev/null 2>&1 && [ -s "$HOME/.nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+    local best
+    best=$(nvm ls --no-colors 2>/dev/null | grep -oE 'v22\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+    if [ -n "${best:-}" ]; then
+      nvm use --silent "$best" >/dev/null 2>&1 || true
+    fi
+  fi
   local cur major minor
+  if ! command -v node >/dev/null 2>&1; then
+    error "需要 Node >= 22.13(pnpm 11 要求),但当前找不到 node。请先安装 Node 22+，或在 shell 里执行 'nvm use 22' 后重试。"
+  fi
   cur=$(node --version 2>/dev/null | sed 's/^v//')
   major=$(printf '%s' "$cur" | cut -d. -f1)
   minor=$(printf '%s' "$cur" | cut -d. -f2)
@@ -59,6 +85,7 @@ ensure_node() {
   error "需要 Node >= 22.13(pnpm 11 要求),当前为 ${cur:-缺失}。请先 'nvm use 22'。"
 }
 ensure_node
+ensure_pnpm
 
 # rustup 装好后把 `source ~/.cargo/env` 写进 shell rc,但已开着的旧 shell 不会自动有。
 # 这里兜底:cargo/rustc 不在 PATH 时 source 一次 ~/.cargo/env。
@@ -78,10 +105,10 @@ ensure_rust
 build_specops_dev() {
   if [ ! -d "$SPECOPS_DIR/node_modules" ]; then
     info "SpecOps node_modules 不存在,在 $SPECOPS_DIR 里跑 pnpm install"
-    (cd "$SPECOPS_DIR" && pnpm install --frozen-lockfile)
+    (cd "$SPECOPS_DIR" && "${PNPM_CMD[@]}" install --frozen-lockfile)
   fi
   info "构建 SpecOps 开发产物"
-  (cd "$SPECOPS_DIR" && pnpm build)
+  (cd "$SPECOPS_DIR" && "${PNPM_CMD[@]}" build)
 }
 
 ensure_sync_server_bundle() {
@@ -94,8 +121,10 @@ ensure_sync_server_bundle() {
     stale=1
   fi
   if [ "$stale" -eq 1 ]; then
-    command -v docker >/dev/null 2>&1 \
-      || error "发布包需要内置 Linux sync server,但没有找到 Docker。请先安装/启动 Docker,或手动生成 resources/kode-sync-server-linux-musl.tar.gz。"
+    if ! command -v docker >/dev/null 2>&1; then
+      warn "没有找到 Docker,跳过刷新内置 Linux sync server。release 包仍会继续生成,但不会包含自动部署所需的最新 bundle。"
+      return 0
+    fi
     info "构建并嵌入 x86_64 Linux sync server"
     bash "$ROOT_DIR/deploy/build-sync-server.sh"
   else
@@ -188,7 +217,7 @@ case "$CMD" in
     # --features devtools:启用 WKWebView devtools(右键 Inspect / F12 / Cmd+Opt+I)。
     # release 打包(./run.sh app)不传该 feature,最终用户机器上彻底关闭调试器。
     # `--` 后的参数会转发给 Cargo；Tauri 自身的 --config 必须放在它前面。
-    exec pnpm tauri dev \
+    exec "${PNPM_CMD[@]}" tauri dev \
       ${TAURI_RESOURCE_ARGS[@]+"${TAURI_RESOURCE_ARGS[@]}"} \
       -- --features devtools
     ;;
@@ -196,7 +225,7 @@ case "$CMD" in
   fe|frontend)
     ensure_node_modules
     info "重新打包前端 → apps/gui/dist/"
-    (cd "$GUI_DIR" && pnpm build)
+    (cd "$GUI_DIR" && "${PNPM_CMD[@]}" build)
     info "完成。如果 .app 已经在跑,需要 quit + 重启或 ./run.sh open"
     ;;
 
@@ -222,7 +251,7 @@ case "$CMD" in
 
     info "完整打包 release .app(60-90s,首次更慢)"
     cd "$GUI_DIR"
-    pnpm tauri build \
+    "${PNPM_CMD[@]}" tauri build \
       ${TAURI_RESOURCE_ARGS[@]+"${TAURI_RESOURCE_ARGS[@]}"} \
       ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
       ${BUNDLE_TARGETS[@]+"${BUNDLE_TARGETS[@]}"} \
