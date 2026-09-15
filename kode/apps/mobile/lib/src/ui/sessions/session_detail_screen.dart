@@ -28,6 +28,7 @@ import 'backend_identity.dart';
 import 'message_markdown.dart';
 import 'speech_locale.dart';
 import 'session_send_button.dart';
+import 'session_glass_layout.dart';
 
 String _compactTokens(int value) {
   if (value >= 1000000) {
@@ -727,133 +728,159 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
 
     return GlassScaffold(
       resizeToAvoidBottomInset: false,
-      appBar: AppBar(
-        flexibleSpace: const GlassNavigationBackground(),
-        toolbarHeight: 56,
-        titleSpacing: 0,
-        title: _SessionHeaderTitle(
-          backendKey: backendKey,
-          title: displayTitle,
-          status: sessionStatus,
-          cwd: cwd,
-        ),
-        actions: [
-          _ModeChip(mode: _mode, busy: _modeBusy, onPick: _switchMode),
-          const SizedBox(width: 8),
-        ],
-        bottom: hasHeaderMeta
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(28),
-                child: _SessionHeaderMeta(
-                  model: model,
-                  tokens: tokens,
-                  contextPct: ctxPct,
-                ),
-              )
-            : null,
-      ),
       body: AnimatedPadding(
         padding: EdgeInsets.only(bottom: keyboardInset),
         duration: reduceMotion
             ? Duration.zero
             : const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
-        child: SafeArea(
-          child: Column(
+        child: SessionGlassLayout(
+          onComposerResize: () {
+            final pinned =
+                _scrollCtrl.hasClients &&
+                _scrollCtrl.position.extentAfter <= _bottomThreshold;
+            if (pinned) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _scrollToBottom(animate: false);
+              });
+            }
+          },
+          header: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (attentionKind != null) _AttentionBanner(kind: attentionKind),
-              Expanded(
-                child: !_historyLoaded && _items.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : _historyError != null && _items.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text(
-                                'Could not load session history.',
-                                style: TextStyle(color: KillLaColors.textMuted),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _historyError!,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: KillLaColors.textMuted,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              OutlinedButton(
-                                onPressed: _loadHistory,
-                                child: const Text('Retry'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : _items.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'No messages yet — type below to send to the session.',
-                          style: TextStyle(color: KillLaColors.textMuted),
-                        ),
-                      )
-                    : Stack(
-                        children: [
-                          NotificationListener<ScrollStartNotification>(
-                            onNotification: (notification) {
-                              if (notification.dragDetails != null) {
-                                _scrollRequestGeneration++;
-                              }
-                              return false;
-                            },
-                            child: ListView.builder(
-                              key: const ValueKey('session-transcript'),
-                              controller: _scrollCtrl,
-                              keyboardDismissBehavior:
-                                  ScrollViewKeyboardDismissBehavior.onDrag,
-                              padding: const EdgeInsets.fromLTRB(
-                                12,
-                                14,
-                                12,
-                                18,
-                              ),
-                              itemCount: _items.length,
-                              itemBuilder: (_, i) {
-                                return _buildItem(
-                                  _items[i],
-                                  backendKey: backendKey,
-                                  outboundMessages: queuedMessages,
-                                );
-                              },
-                            ),
-                          ),
-                          if (_showScrollToBottom)
-                            Positioned(
-                              right: 16,
-                              bottom: 12,
-                              child: _ScrollToBottomButton(
-                                onPressed: _jumpToLatestMessage,
-                              ),
-                            ),
-                        ],
+              Row(
+                children: [
+                  GlassSurface(
+                    radius: 28,
+                    blur: true,
+                    floating: true,
+                    subtle: true,
+                    child: IconButton(
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
                       ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
-                child: GlassSurface(
-                  blur: true,
-                  child: _buildInput(
-                    backendIdentity(backendKey).label,
-                    working: sessionStatus == 'busy',
+                      tooltip: MaterialLocalizations.of(
+                        context,
+                      ).backButtonTooltip,
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        size: 20,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _SessionHeaderTitle(
+                      backendKey: backendKey,
+                      title: displayTitle,
+                      status: sessionStatus,
+                      cwd: cwd,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GlassSurface(
+                    radius: 28,
+                    blur: true,
+                    floating: true,
+                    subtle: true,
+                    child: _ModeChip(
+                      mode: _mode,
+                      busy: _modeBusy,
+                      onPick: _switchMode,
+                    ),
+                  ),
+                ],
               ),
+              if (hasHeaderMeta)
+                _SessionHeaderMeta(
+                  model: model,
+                  tokens: tokens,
+                  contextPct: ctxPct,
+                ),
+              if (attentionKind != null) _AttentionBanner(kind: attentionKind),
             ],
           ),
+          composer: GlassSurface(
+            key: const ValueKey('session-floating-composer'),
+            radius: 32,
+            blur: true,
+            floating: true,
+            child: _buildInput(
+              backendIdentity(backendKey).label,
+              working: sessionStatus == 'busy',
+            ),
+          ),
+          jumpToLatest: _showScrollToBottom
+              ? GlassSurface(
+                  radius: 28,
+                  blur: true,
+                  floating: true,
+                  child: _ScrollToBottomButton(onPressed: _jumpToLatestMessage),
+                )
+              : null,
+          transcriptBuilder: (padding) => !_historyLoaded && _items.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : _historyError != null && _items.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Could not load session history.',
+                          style: TextStyle(color: KillLaColors.textMuted),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _historyError!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: KillLaColors.textMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton(
+                          onPressed: _loadHistory,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : _items.isEmpty
+              ? const Center(
+                  child: Text(
+                    'No messages yet — type below to send to the session.',
+                    style: TextStyle(color: KillLaColors.textMuted),
+                  ),
+                )
+              : NotificationListener<ScrollStartNotification>(
+                  onNotification: (notification) {
+                    if (notification.dragDetails != null) {
+                      _scrollRequestGeneration++;
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    key: const ValueKey('session-transcript'),
+                    controller: _scrollCtrl,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: padding,
+                    itemCount: _items.length,
+                    itemBuilder: (_, i) {
+                      return _buildItem(
+                        _items[i],
+                        backendKey: backendKey,
+                        outboundMessages: queuedMessages,
+                      );
+                    },
+                  ),
+                ),
         ),
       ),
     );
@@ -940,7 +967,6 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
   }
 
   Widget _buildInput(String backendLabel, {required bool working}) {
-    final colors = Theme.of(context).colorScheme;
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: _inputCtrl,
       builder: (context, value, _) {
@@ -986,23 +1012,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
                         hintText: _listening
                             ? 'Listening…'
                             : 'Message $backendLabel…',
-                        filled: true,
-                        fillColor: colors.surfaceContainerHighest,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(13),
-                          borderSide: BorderSide(color: colors.outline),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(13),
-                          borderSide: BorderSide(color: colors.outline),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(13),
-                          borderSide: BorderSide(
-                            color: colors.primary,
-                            width: 1.5,
-                          ),
-                        ),
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 13,
@@ -1013,6 +1026,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
                   ),
                   const SizedBox(width: 7),
                   SessionSendButton(
+                    circular: true,
                     working: working,
                     text: value.text,
                     onSend: _send,
@@ -1057,12 +1071,10 @@ class _ComposerIconButton extends StatelessWidget {
         width: 44,
         height: 46,
         child: Material(
-          color: active
-              ? colors.errorContainer
-              : colors.surfaceContainerHighest,
+          color: active ? colors.errorContainer : Colors.transparent,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(13),
-            side: BorderSide(color: active ? colors.error : colors.outline),
+            side: BorderSide(color: active ? colors.error : Colors.transparent),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -1195,8 +1207,8 @@ class _SessionHeaderTitle extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: colors.onSurface,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
                   letterSpacing: 0.15,
                 ),
               ),
@@ -1261,9 +1273,6 @@ class _SessionHeaderMeta extends StatelessWidget {
       height: 28,
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: colors.outline)),
-      ),
       child: Row(
         children: [
           if (model.isNotEmpty)
@@ -1348,15 +1357,14 @@ class _ScrollToBottomButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Material(
-      color: colors.surfaceContainerHighest,
-      shape: CircleBorder(side: BorderSide(color: colors.outline)),
-      elevation: 3,
+      type: MaterialType.transparency,
+      shape: const CircleBorder(),
       child: IconButton(
         key: const ValueKey('scroll-to-bottom'),
         tooltip: 'Jump to latest message',
         onPressed: onPressed,
         icon: const Icon(Icons.keyboard_arrow_down_rounded),
-        color: colors.primary,
+        color: colors.onSurface,
         iconSize: 26,
         constraints: const BoxConstraints.tightFor(width: 44, height: 44),
       ),
@@ -1443,9 +1451,9 @@ class _MessageBubble extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 540),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: bubbleColor,
+        color: isUser || isSystem ? bubbleColor : Colors.transparent,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: bubbleBorder),
+        border: isUser || isSystem ? Border.all(color: bubbleBorder) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2195,7 +2203,8 @@ class _ModeChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final (color, label) = _styleFor(mode);
     return PopupMenuButton<String>(
-      tooltip: 'Permission mode',
+      tooltip: 'Permission mode: $label',
+      initialValue: mode,
       borderRadius: BorderRadius.circular(8),
       enabled: !busy,
       onSelected: onPick,
@@ -2221,39 +2230,29 @@ class _ModeChip extends StatelessWidget {
         ),
       ],
       child: Container(
-        height: 30,
+        height: 44,
+        width: 52,
         padding: const EdgeInsets.symmetric(horizontal: 7),
-        margin: const EdgeInsets.symmetric(vertical: 13),
+        margin: EdgeInsets.zero,
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.10),
-          border: Border.all(color: color.withValues(alpha: 0.48)),
+          color: Colors.transparent,
           borderRadius: BorderRadius.circular(9),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (busy)
-              SizedBox(
-                width: 10,
-                height: 10,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: color,
+        child: Center(
+          child: busy
+              ? SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: color,
+                  ),
+                )
+              : Icon(
+                  Icons.more_horiz_rounded,
+                  size: 24,
+                  color: Theme.of(context).colorScheme.onSurface,
                 ),
-              )
-            else
-              Icon(Icons.shield_outlined, size: 13, color: color),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 9.5,
-                color: color,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.25,
-              ),
-            ),
-          ],
         ),
       ),
     );
