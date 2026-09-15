@@ -118,8 +118,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     ref.watch(sessionAttentionProvider);
 
     return GlassScaffold(
-      appBar: AppBar(
-        flexibleSpace: const GlassNavigationBackground(),
+      appBar: GlassAppBar(
         title: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: () => context.push('/devices'),
@@ -181,7 +180,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                             );
                           }
                           return ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                             itemCount: groups.length,
                             separatorBuilder: (_, index) =>
                                 const SizedBox(height: 12),
@@ -298,7 +297,7 @@ class _PathGroupCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 15,
-                              fontWeight: FontWeight.w900,
+                              fontWeight: FontWeight.w700,
                               color: colors.onSurface,
                               letterSpacing: 0.2,
                             ),

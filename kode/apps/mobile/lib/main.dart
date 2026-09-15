@@ -9,6 +9,7 @@ import 'src/ui/devices/devices_screen.dart';
 import 'src/ui/sessions/session_detail_screen.dart';
 import 'src/ui/sessions/sessions_screen.dart';
 import 'src/ui/theme.dart';
+import 'src/ui/glass.dart';
 
 void main() {
   runApp(const ProviderScope(child: KodeApp()));
@@ -73,18 +74,14 @@ class _LoadingScreen extends StatelessWidget {
   const _LoadingScreen();
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+    return GlassScaffold(
       body: const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text(
-              'CONNECTING…',
-              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.5),
-            ),
+            Text('Connecting…', style: TextStyle(fontWeight: FontWeight.w600)),
           ],
         ),
       ),

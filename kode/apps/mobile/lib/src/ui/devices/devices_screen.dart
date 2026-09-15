@@ -109,10 +109,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     final colors = Theme.of(context).colorScheme;
 
     return GlassScaffold(
-      appBar: AppBar(
-        title: const Text('Devices'),
-        flexibleSpace: const GlassNavigationBackground(),
-      ),
+      appBar: GlassAppBar(title: const Text('Devices')),
       body: SafeArea(
         child: Column(
           children: [
@@ -120,7 +117,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
                 decoration: BoxDecoration(
                   color: colors.errorContainer,
                   borderRadius: BorderRadius.circular(12),
@@ -145,12 +142,12 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                       minVerticalPadding: 12,
                       leading: CircleAvatar(
                         backgroundColor: active
-                            ? colors.primaryContainer
-                            : colors.surfaceContainerHighest,
+                            ? colors.primary.withValues(alpha: .12)
+                            : colors.onSurface.withValues(alpha: .04),
                         child: Icon(
                           Icons.computer_rounded,
                           color: active
-                              ? colors.onPrimaryContainer
+                              ? colors.primary
                               : colors.onSurfaceVariant,
                         ),
                       ),
@@ -194,22 +191,30 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                       selectedTileColor: colors.primaryContainer.withValues(
                         alpha: 0.22,
                       ),
-                      onTap: active || busy ? null : () => _activate(endpoint),
+                      onTap: active || _busyKey != null
+                          ? null
+                          : () => _activate(endpoint),
                     ),
                   );
                 },
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _busyKey == null
-                      ? () => context.push('/pair?add=1')
-                      : null,
-                  icon: const Icon(Icons.qr_code_scanner_rounded),
-                  label: const Text('Add device with QR code'),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: GlassSurface(
+                radius: 28,
+                blur: true,
+                floating: true,
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: TextButton.icon(
+                    onPressed: _busyKey == null
+                        ? () => context.push('/pair?add=1')
+                        : null,
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('Add device with QR code'),
+                  ),
                 ),
               ),
             ),

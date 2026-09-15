@@ -127,10 +127,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return GlassScaffold(
-      appBar: AppBar(
-        title: const Text('Pair with kode'),
-        flexibleSpace: const GlassNavigationBackground(),
-      ),
+      appBar: GlassAppBar(title: const Text('Pair with kode')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -140,11 +137,11 @@ class _PairScreenState extends ConsumerState<PairScreen> {
             _buildPermissionCard(colors),
             const SizedBox(height: 20),
             Text(
-              'ENTER ONE-TIME CODE MANUALLY',
+              'Enter a one-time code',
               style: TextStyle(
                 color: colors.primary,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.2,
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
               ),
             ),
             const SizedBox(height: 8),
@@ -214,7 +211,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
                       ),
                     )
                   : const Icon(Icons.link, size: 18),
-              label: Text(_claiming ? 'PAIRING…' : 'CLAIM PAIRING CODE'),
+              label: Text(_claiming ? 'Pairing…' : 'Pair device'),
             ),
           ],
         ),
@@ -223,23 +220,17 @@ class _PairScreenState extends ConsumerState<PairScreen> {
   }
 
   Widget _buildScanCard(ColorScheme colors) {
-    return Container(
+    return GlassSurface(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border.all(color: colors.primary, width: 1.5),
-        borderRadius: BorderRadius.circular(14),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'SCAN ONE-TIME QR',
+            'Scan a pairing QR code',
             style: TextStyle(
               color: colors.primary,
               fontSize: 16,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.2,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 6),
@@ -253,7 +244,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
                 ? null
                 : () => setState(() => _scanning = true),
             icon: const Icon(Icons.qr_code_scanner),
-            label: const Text('OPEN CAMERA'),
+            label: const Text('Open camera'),
           ),
         ],
       ),
@@ -261,22 +252,17 @@ class _PairScreenState extends ConsumerState<PairScreen> {
   }
 
   Widget _buildPermissionCard(ColorScheme colors) {
-    return Container(
+    return GlassSurface(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border.all(color: colors.outline),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Row(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.lock_outline, size: 20, color: KillLaColors.textSecondary),
-          SizedBox(width: 10),
+          Icon(Icons.lock_outline, size: 20, color: colors.onSurfaceVariant),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               'This binding can read synced sessions and send messages to them. The desktop remains the only executor, and offline messages are not queued.',
-              style: TextStyle(color: KillLaColors.textSecondary, height: 1.45),
+              style: TextStyle(color: colors.onSurfaceVariant, height: 1.45),
             ),
           ),
         ],
