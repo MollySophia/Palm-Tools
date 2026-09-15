@@ -118,6 +118,27 @@ Mobile device bindings use a dedicated device ledger. The current desktop is nam
 
 ### Forms and overlays
 
+#### Mobile conversation floating variant (2026-09-15)
+
+For session detail, this approved variant supersedes the flat bordered composer
+description above. The transcript fills the screen and scrolls behind independent
+glass back/permission controls and one 32px-radius input capsule. The title is
+unboxed; model/token/context metadata stays directly beneath it. Continuous
+theme-colored top/bottom scrims fade inward without hard AppBar boundaries.
+`session_glass_layout.dart` measures actual chrome heights to reserve readable
+first/last-message insets, including multiline drafts, voice rails, and safe areas.
+`GlassSurface.floating` uses the existing theme surface at .72/.48 opacity with
+sigma-18 clipped blur; only fixed interactive islands blur. The keyboard lifts
+the composer and bottom fade together. High contrast uses opaque chrome and
+reduced motion removes backdrop blur. Desktop is unchanged.
+
+The session list, device list, and pairing form share `GlassAppBar`: an unboxed
+title, quiet glass back control, and grouped action capsule without a hard bar
+divider. Device onboarding uses a floating glass footer; scrolling cards avoid
+per-row blur. Pairing fields retain their bounded layout and existing validation.
+These routes use the same neutral materials, restrained borders, and typography
+as the conversation without placing form fields behind floating chrome.
+
 The Flutter companion uses an iOS-inspired glass variant, requested for mobile.
 `apps/mobile/lib/src/ui/theme.dart` owns its cool neutral surfaces (#101419 dark,
 #F2F5F7 light), existing Kode green accent, SF system typography, and 16/22/28px

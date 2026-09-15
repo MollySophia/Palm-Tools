@@ -107,6 +107,8 @@ layout and keyboard regression coverage lives in Flutter widget tests.
 
 ## Navigation and responsive behavior
 
+- Mobile session floating chrome: `SessionGlassLayout` is the canonical session-detail overlay owner. Its transcript occupies the full viewport under top/bottom gradient scrims; actual header/composer measurements own list padding so endpoint messages remain fully readable. The header keeps identity/title/path/metadata and permission controls, while the input capsule and centered jump-to-latest float above the bottom safe area or keyboard. Decorative scrims ignore pointer events. This replaces the former bounded AppBar/Column arrangement without changing message delivery, authoritative busy status, or history-reading scroll behavior.
+
 - Mobile detail reconstruction restores unprocessed outbound bubbles from the session queue before history loading. Existing bubbles remain visible during history fetch; canonical CLI messages reconcile them in place. This survives route disposal/re-entry within the current device session, but the in-memory queue is not persisted across app process termination.
 
 - Mobile composer action uses the same live session status as the header. Busy + empty/whitespace draft displays a disabled running spinner; any nonblank draft takes priority and enables Send even while the agent works. Clearing/sending restores the spinner if still busy; idle + empty displays a disabled arrow. Button geometry stays fixed and reduced-motion replaces continuous rotation with a static progress arc.
