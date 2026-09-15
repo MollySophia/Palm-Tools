@@ -166,9 +166,23 @@ void main() {
             ),
           ),
         );
-        await tester.pumpAndSettle();
+        // A busy session intentionally keeps its progress indicator animating.
+        // Wait for history/chrome measurement, not for all animations to stop.
+        for (var frame = 0; frame < 12; frame++) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
         expect(tester.takeException(), isNull);
         expect(find.byType(GlassScaffold), findsOneWidget);
+        if (page == 'conversation') {
+          expect(
+            find.byKey(const ValueKey('session-floating-composer')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('session-transcript')),
+            findsOneWidget,
+          );
+        }
         if (output.isNotEmpty) {
           await expectLater(
             find.byKey(const ValueKey('preview')),

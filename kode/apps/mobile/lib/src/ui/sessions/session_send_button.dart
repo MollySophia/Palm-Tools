@@ -5,12 +5,14 @@ class SessionSendButton extends StatelessWidget {
   final bool working;
   final String text;
   final VoidCallback onSend;
+  final bool circular;
 
   const SessionSendButton({
     super.key,
     required this.working,
     required this.text,
     required this.onSend,
+    this.circular = false,
   });
 
   @override
@@ -32,9 +34,11 @@ class SessionSendButton extends StatelessWidget {
             style: FilledButton.styleFrom(
               elevation: 0,
               padding: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(13),
-              ),
+              shape: circular
+                  ? const CircleBorder()
+                  : RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
             ),
             child: showProgress
                 ? SizedBox(
