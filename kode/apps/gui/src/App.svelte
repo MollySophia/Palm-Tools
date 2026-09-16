@@ -50,6 +50,7 @@
   import UpdateButton from './lib/UpdateButton.svelte'
   import ScreenshotEditor, { type ScreenshotDraft, type ScreenshotCrop } from './lib/ScreenshotEditor.svelte'
   import { avatarLibrary, loadAvatarLibrary, type AvatarStatus } from './lib/avatars'
+  import { absoluteDroppedFilePaths } from './lib/file_drop'
   import {
     tabs,
     activeId,
@@ -711,12 +712,13 @@
     // 2. 外部文件拖拽(Finder / VS Code)
     if (!dt.types.includes('Files')) return
     if (tab.endpointId && tab.endpointId.kind === 'remote') return
-    const paths: string[] = []
-    for (let i = 0; i < dt.files.length; i++) {
-      const f = dt.files[i] as File & { path?: string }
-      // Tauri 2 在 macOS WKWebView 给 File 注入 .path;若没有则退化为 name
-      paths.push(f.path ?? f.name)
-    }
+    // Prefer the desktop webview's File.path. Finder/VS Code may instead
+    // expose file:// URIs, which retain the absolute path and escaped spaces.
+    // Never degrade to File.name:the CLI must receive a trustworthy full path.
+    const paths = absoluteDroppedFilePaths(
+      dt.files as FileList & { [index: number]: File & { path?: string } },
+      dt.getData('text/uri-list'),
+    )
     if (paths.length === 0) return
     const text = paths.map((p) => `@${p}`).join(' ') + ' '
     ipc.writeInput(tab.id, new TextEncoder().encode(text), tab.endpointId)
