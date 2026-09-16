@@ -161,6 +161,7 @@ layout and keyboard regression coverage lives in Flutter widget tests.
 - Stale-request cancellation/invalidation: Pending events queue one refresh during mutation and reconcile afterward.
 - Dialog/form preservation and retry after mutation failure: Failed batch items remain checked; the shared reason remains a single submitted value for the batch attempt.
 - Terminal cancel status: A bare Escape sent to the PTY releases the local turn hold. Continuing PTY output may keep the session busy, but a backend that returns to its composer without emitting `task_complete`, `turn_aborted`, or `Stop` must settle to idle after the normal PTY activity threshold. Cancel does not emit a false completion notification.
+- Consecutive Ctrl+C guard: The first bare Ctrl+C is sent to the active main PTY unchanged. A second bare Ctrl+C within two seconds is held behind the app-owned destructive confirmation because supported CLIs may interpret it as session exit. Cancelling sends no second ETX and restores terminal focus; confirming sends exactly one ETX. Other input, an elapsed window, shell terminals, tab close, and every other exit path remain unchanged.
 
 ## Validation
 

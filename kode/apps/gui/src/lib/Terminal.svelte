@@ -30,6 +30,9 @@
     type TerminalAppearance,
   } from './terminal_settings'
   import { TerminalAnsiThemeAdapter } from './terminal_ansi_theme'
+  import ConfirmDialog from './ConfirmDialog.svelte'
+  import { currentLocale, t } from './i18n'
+  import { ConsecutiveCtrlCGuard } from './consecutive_ctrl_c_guard'
 
   /**
    * 健康尺寸下限。低于此值的 cols/rows 一律视为容器还没准备好,
@@ -81,6 +84,30 @@
   let _onCmdUp: ((e: KeyboardEvent) => void) | null = null
   let _onWheelFallback: ((e: WheelEvent) => void) | null = null
   let cmdHeld = $state(false)
+  let ctrlCExitConfirmOpen = $state(false)
+  const ctrlCGuard = new ConsecutiveCtrlCGuard()
+  let tr = $derived.by(() => {
+    void $currentLocale
+    return (key: string) => t(key)
+  })
+
+  function writePtyInput(data: string) {
+    const bytes = new TextEncoder().encode(data)
+    ipc.writeInput(sessionId, bytes, endpointId).catch(console.error)
+  }
+
+  function cancelConsecutiveCtrlC() {
+    ctrlCExitConfirmOpen = false
+    ctrlCGuard.reset()
+    requestAnimationFrame(() => term?.focus?.())
+  }
+
+  function confirmConsecutiveCtrlC() {
+    ctrlCExitConfirmOpen = false
+    ctrlCGuard.reset()
+    writePtyInput('\x03')
+    requestAnimationFrame(() => term?.focus?.())
+  }
 
   // ── 搜索(Ctrl/Cmd+F)──────────────────────────────────────────
   // 防卡顿三件套(业界通用):
@@ -341,8 +368,11 @@
     //    JS 单线程保证 invoke 调用顺序;后端 write_input 是同步命令,
     //    在 IPC 线程上按到达顺序串行执行(参考 commands.rs 注释)。
     term.onData((data: string) => {
-      const bytes = new TextEncoder().encode(data)
-      ipc.writeInput(sessionId, bytes, endpointId).catch(console.error)
+      if (ctrlCGuard.inspect(data) === 'confirm') {
+        ctrlCExitConfirmOpen = true
+        return
+      }
+      writePtyInput(data)
     })
 
     // 4.5) WKWebView 文本编辑快捷键拦截。
@@ -1562,6 +1592,18 @@
     </div>
   {/if}
 </div>
+
+{#if ctrlCExitConfirmOpen}
+  <ConfirmDialog
+    title={tr('terminal.ctrlCExitConfirm.title')}
+    message={tr('terminal.ctrlCExitConfirm.message')}
+    confirmLabel={tr('terminal.ctrlCExitConfirm.confirm')}
+    cancelLabel={tr('terminal.ctrlCExitConfirm.cancel')}
+    danger
+    onConfirm={confirmConsecutiveCtrlC}
+    onClose={cancelConsecutiveCtrlC}
+  />
+{/if}
 
 <style>
   .term-host {

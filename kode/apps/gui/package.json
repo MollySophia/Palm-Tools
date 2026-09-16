@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json && pnpm test:terminal-theme && pnpm test:updates",
+    "check": "svelte-check --tsconfig ./tsconfig.json && pnpm test:terminal-theme && pnpm test:updates && pnpm test:session-input && pnpm test:file-drop",
     "test:updates": "node --experimental-strip-types --test tests/app_updates.test.ts",
     "test:terminal-theme": "node --experimental-strip-types --test tests/terminal_ansi_theme.test.ts",
+    "test:session-input": "node --experimental-strip-types --test tests/consecutive_ctrl_c_guard.test.ts",
+    "test:file-drop": "node --experimental-strip-types --test tests/file_drop.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -1457,6 +1457,22 @@
     "message": "Cancel",
     "description": "Close-tab confirmation dialog cancel button"
   },
+  "terminal.ctrlCExitConfirm.title": {
+    "message": "Exit this session?",
+    "description": "Consecutive Ctrl+C confirmation dialog title"
+  },
+  "terminal.ctrlCExitConfirm.message": {
+    "message": "Sending Ctrl+C again may exit the current CLI session. Continue?",
+    "description": "Consecutive Ctrl+C confirmation dialog consequence"
+  },
+  "terminal.ctrlCExitConfirm.confirm": {
+    "message": "Send Ctrl+C",
+    "description": "Consecutive Ctrl+C confirmation action"
+  },
+  "terminal.ctrlCExitConfirm.cancel": {
+    "message": "Keep session",
+    "description": "Consecutive Ctrl+C cancellation action"
+  },
   "tab.action.newTab": {
     "message": "New tab",
     "description": "New tab button aria-label"
