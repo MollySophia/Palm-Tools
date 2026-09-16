@@ -118,6 +118,14 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     WidgetsBinding.instance.addObserver(this);
     _unreadCountNotifier = ref.read(sessionUnreadCountProvider.notifier)
       ..viewSession(widget.sessionId);
+    final draft = ref.read(sessionDraftProvider)[widget.sessionId];
+    if (draft != null) {
+      _inputCtrl.value = TextEditingValue(
+        text: draft,
+        selection: TextSelection.collapsed(offset: draft.length),
+      );
+    }
+    _inputCtrl.addListener(_saveDraft);
     _scrollCtrl.addListener(_handleScroll);
     _inputFocus.addListener(_handleComposerFocus);
     // A route rebuild must not drop messages awaiting the CLI transcript.
@@ -167,6 +175,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     WidgetsBinding.instance.removeObserver(this);
     _wsSub?.close();
     if (_speechInitialized) unawaited(_speech.cancel());
+    _inputCtrl.removeListener(_saveDraft);
     _inputCtrl.dispose();
     _inputFocus.removeListener(_handleComposerFocus);
     _inputFocus.dispose();
@@ -174,6 +183,12 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
       ..removeListener(_handleScroll)
       ..dispose();
     super.dispose();
+  }
+
+  void _saveDraft() {
+    ref
+        .read(sessionDraftProvider.notifier)
+        .save(widget.sessionId, _inputCtrl.text);
   }
 
   void _handleComposerFocus() {
@@ -535,6 +550,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen>
     // Clear before any asynchronous delivery and dismiss the IME immediately.
     // This prevents iOS composing text from being restored after submit.
     _inputCtrl.clear();
+    ref.read(sessionDraftProvider.notifier).clear(widget.sessionId);
     _dismissKeyboard();
   }
 

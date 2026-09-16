@@ -393,6 +393,77 @@ void main() {
     );
   });
 
+  testWidgets('composer draft survives leaving and reopening the session', (
+    tester,
+  ) async {
+    final api = _FakeApiClient();
+    final events = StreamController<Envelope>();
+    addTearDown(events.close);
+    final container = ProviderContainer(
+      overrides: [
+        apiClientProvider.overrideWithValue(api),
+        eventStreamProvider.overrideWith((ref) => events.stream),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    Widget app(Widget home) => UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(theme: KillLaTheme.light(), home: home),
+    );
+
+    await tester.pumpWidget(app(const SessionDetailScreen(sessionId: 7)));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, 'unfinished draft');
+    expect(container.read(sessionDraftProvider)[7], 'unfinished draft');
+
+    await tester.pumpWidget(app(const SizedBox()));
+    await tester.pump();
+    await tester.pumpWidget(app(const SessionDetailScreen(sessionId: 7)));
+    await tester.pump();
+
+    expect(find.text('unfinished draft'), findsOneWidget);
+  });
+
+  testWidgets('sending clears the saved composer draft', (tester) async {
+    final api = _FakeApiClient();
+    final events = StreamController<Envelope>();
+    addTearDown(events.close);
+    final container = ProviderContainer(
+      overrides: [
+        apiClientProvider.overrideWithValue(api),
+        eventStreamProvider.overrideWith((ref) => events.stream),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: KillLaTheme.light(),
+          home: const SessionDetailScreen(sessionId: 7),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, 'send this draft');
+    await tester.pump();
+    expect(container.read(sessionDraftProvider)[7], 'send this draft');
+
+    final sendButton = tester.widget<FilledButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.arrow_upward_rounded),
+        matching: find.byType(FilledButton),
+      ),
+    );
+    sendButton.onPressed!();
+    await tester.pump();
+
+    expect(container.read(sessionDraftProvider).containsKey(7), isFalse);
+    expect(api.sent, ['send this draft\n']);
+  });
+
   testWidgets('keyboard inset lifts the transcript and composer above it', (
     tester,
   ) async {

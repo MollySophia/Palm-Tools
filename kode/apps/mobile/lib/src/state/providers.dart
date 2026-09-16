@@ -191,6 +191,45 @@ final sessionUnreadCountProvider =
       SessionUnreadCountNotifier.new,
     );
 
+/// Unsubmitted composer text, isolated per session for the current app process.
+///
+/// Navigating away from a detail route must not discard work. Drafts are
+/// cleared only after the text has entered the outbound queue, when its
+/// session exits, or when the active endpoint changes.
+class SessionDraftNotifier extends Notifier<Map<int, String>> {
+  @override
+  Map<int, String> build() {
+    ref.listen(endpointProvider, (_, _) => state = const {});
+    ref.listen<AsyncValue<Envelope>>(eventStreamProvider, (_, event) {
+      event.whenData((envelope) {
+        if (envelope.type == 'session.exited') clear(envelope.sessionId);
+      });
+    });
+    return const {};
+  }
+
+  void save(int sessionId, String text) {
+    if (text.isEmpty) {
+      clear(sessionId);
+      return;
+    }
+    if (state[sessionId] == text) return;
+    state = Map.unmodifiable({...state, sessionId: text});
+  }
+
+  void clear(int sessionId) {
+    if (!state.containsKey(sessionId)) return;
+    state = Map<int, String>.unmodifiable(
+      Map<int, String>.from(state)..remove(sessionId),
+    );
+  }
+}
+
+final sessionDraftProvider =
+    NotifierProvider<SessionDraftNotifier, Map<int, String>>(
+      SessionDraftNotifier.new,
+    );
+
 /// session 列表 — 启动时拉一次 /sessions,WS 事件来了增量更新。
 final sessionsProvider =
     AsyncNotifierProvider<SessionsNotifier, List<SessionDto>>(
