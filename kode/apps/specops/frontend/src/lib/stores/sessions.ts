@@ -203,6 +203,73 @@ function upsertRealtimeTranscript(
   }
 }
 
+// ============ Realtime transcript coalescing (perf) ============
+// The SSE stream delivers one transcript_delta per agent token — dozens per
+// second. Applying each synchronously re-renders the whole chat thread and
+// destroys in-progress text selections. Buffer transcript events and flush
+// them in order at most once per animation frame: Svelte 5 batches effects
+// within one synchronous flush, so the DOM still updates exactly once per
+// frame, while per-event O(transcript) recomputes collapse into one.
+interface PendingTranscriptEvent {
+  sessionId: string;
+  type: 'session.transcript_appended' | 'session.transcript_delta' | 'session.transcript_upsert';
+  payload: RealtimeTranscriptPayload & { entries?: TranscriptEntry[] };
+  at?: string;
+}
+
+let pendingTranscriptEvents: PendingTranscriptEvent[] = [];
+let transcriptFlushHandle: number | null = null;
+let transcriptFlushIsTimer = false;
+
+function flushPendingTranscriptEvents(): void {
+  transcriptFlushHandle = null;
+  const events = pendingTranscriptEvents;
+  pendingTranscriptEvents = [];
+  for (const event of events) {
+    if (event.type === 'session.transcript_appended') {
+      appendTranscriptEntries(event.sessionId, event.payload.entries ?? [], event.at);
+    } else {
+      upsertRealtimeTranscript(event.sessionId, event.payload, event.type, event.at);
+    }
+  }
+}
+
+function cancelTranscriptFlush(): void {
+  if (transcriptFlushHandle === null) return;
+  if (transcriptFlushIsTimer) window.clearTimeout(transcriptFlushHandle);
+  else cancelAnimationFrame(transcriptFlushHandle);
+  transcriptFlushHandle = null;
+}
+
+function scheduleTranscriptFlush(): void {
+  if (transcriptFlushHandle !== null) return;
+  // Hidden windows never receive rAF; fall back to a timer so the transcript
+  // still converges while the console window is in the background
+  // (WKWebView throttles background timers, which is acceptable here).
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+    transcriptFlushHandle = requestAnimationFrame(flushPendingTranscriptEvents);
+    transcriptFlushIsTimer = false;
+  } else {
+    transcriptFlushHandle = window.setTimeout(flushPendingTranscriptEvents, 250);
+    transcriptFlushIsTimer = true;
+  }
+}
+
+function queueTranscriptEvent(event: PendingTranscriptEvent): void {
+  pendingTranscriptEvents.push(event);
+  scheduleTranscriptFlush();
+}
+
+// A rAF scheduled right before the window is hidden would stall indefinitely;
+// swap it to a timer when that happens.
+function onVisibilityForTranscriptFlush(): void {
+  if (transcriptFlushHandle === null || transcriptFlushIsTimer) return;
+  if (document.visibilityState === 'hidden') {
+    cancelTranscriptFlush();
+    scheduleTranscriptFlush();
+  }
+}
+
 export async function loadSessions(options: LoadSessionsOptions = {}): Promise<void> {
   const showLoading = options.showLoading ?? true;
   if (showLoading) {
@@ -268,6 +335,7 @@ export async function refreshSession(id: string): Promise<boolean> {
 
 export function subscribeEvents(): void {
   if (es !== null) return;
+  document.addEventListener('visibilitychange', onVisibilityForTranscriptFlush);
   es = openEventStream((type, data) => {
     const activeId = get(activeSessionId);
     // Server-side events carry session_id at the top level of the event object
@@ -277,11 +345,12 @@ export function subscribeEvents(): void {
     if (type === 'session.created') {
       loadSessions({ showLoading: false });
       if (sid && sid === activeId) selectSession(sid);
-    } else if (type === 'session.transcript_appended') {
-      const entries = evt?.payload?.entries ?? [];
-      if (sid && sid === activeId) appendTranscriptEntries(sid, entries, evt?.at);
-    } else if (type === 'session.transcript_delta' || type === 'session.transcript_upsert') {
-      if (sid && sid === activeId && evt?.payload) upsertRealtimeTranscript(sid, evt.payload, type, evt.at);
+    } else if (type === 'session.transcript_appended' || type === 'session.transcript_delta' || type === 'session.transcript_upsert') {
+      // High-frequency transcript events go through the rAF coalescing queue
+      // above; ordering across the three event types is preserved.
+      if (sid && sid === activeId && evt?.payload) {
+        queueTranscriptEvent({ sessionId: sid, type, payload: evt.payload, at: evt?.at });
+      }
     } else if (type === 'session.updated' || type === 'session.status_changed' || type === 'session.action_required' || type === 'session.closed') {
       if (sid && sid === activeId) refreshSession(sid);
     }
@@ -293,6 +362,10 @@ export function subscribeEvents(): void {
 }
 
 export function unsubscribeEvents(): void {
+  document.removeEventListener('visibilitychange', onVisibilityForTranscriptFlush);
+  cancelTranscriptFlush();
+  // Drain anything still queued so un-subscribing never drops events.
+  flushPendingTranscriptEvents();
   if (es !== null) {
     es.close();
     es = null;
